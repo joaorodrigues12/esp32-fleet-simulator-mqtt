@@ -1,0 +1,111 @@
+{
+  "original_status": {
+    "schema_version": 1,
+    "message_id": "f5c7924e-65ff-4b89-848e-3e124389b2bb",
+    "device_id": "esp32-001",
+    "boot_id": "b0db56ca-12a0-4a6f-886e-e03dd41cab96",
+    "occurred_at": "2026-11-20T17:59:58Z",
+    "state": "online",
+    "reason": "connected",
+    "heartbeat_interval_seconds": 10
+  },
+  "original_command": {
+    "schema_version": 1,
+    "message_id": "454a9a10-3abf-431f-9b79-bb46244e4639",
+    "command_id": "dad1b6be-1bf5-487a-9620-d96cecce8a3e",
+    "device_id": "esp32-001",
+    "boot_id": "b0db56ca-12a0-4a6f-886e-e03dd41cab96",
+    "occurred_at": "2026-11-20T18:00:00Z",
+    "expires_at": "2026-11-20T18:00:30Z",
+    "action": "START",
+    "session_id": "420ffcdf-9e93-4317-b263-63efc3e915b6",
+    "session_version": 3
+  },
+  "delayed_reading": {
+    "schema_version": 1,
+    "message_id": "bfb2d0c2-7b0c-4971-81fa-afd309c76b57",
+    "device_id": "esp32-001",
+    "boot_id": "b0db56ca-12a0-4a6f-886e-e03dd41cab96",
+    "occurred_at": "2026-11-20T18:00:02Z",
+    "sampled_at": "2026-11-20T18:00:00Z",
+    "sequence_number": 42,
+    "session_id": "420ffcdf-9e93-4317-b263-63efc3e915b6",
+    "session_version": 3,
+    "heart_rate_bpm": 82,
+    "respiratory_rate_rpm": 17,
+    "temperature_c": 36.7
+  },
+  "offline_transition": {
+    "disconnected_at": "2026-11-20T18:00:03Z",
+    "changed_at": "2026-11-20T18:00:06Z",
+    "previous_session_id": "420ffcdf-9e93-4317-b263-63efc3e915b6",
+    "current_session_id": "ef0a17ef-aa92-4920-823f-891b01ce1fb9",
+    "session_version": 5
+  },
+  "reconnected_status": {
+    "schema_version": 1,
+    "message_id": "51610f98-2227-4b84-8665-0c719406f586",
+    "device_id": "esp32-001",
+    "boot_id": "912c9dc9-1387-4a00-9db0-e123783b89f5",
+    "occurred_at": "2026-11-20T18:00:10Z",
+    "state": "online",
+    "reason": "connected",
+    "heartbeat_interval_seconds": 10
+  },
+  "rejected_ack": {
+    "schema_version": 1,
+    "message_id": "2bf3eedf-a0f9-4a11-8af8-b9467d372742",
+    "command_id": "dad1b6be-1bf5-487a-9620-d96cecce8a3e",
+    "device_id": "esp32-001",
+    "boot_id": "912c9dc9-1387-4a00-9db0-e123783b89f5",
+    "occurred_at": "2026-11-20T18:00:11Z",
+    "accepted": false,
+    "reason": "INVALID_BOOT",
+    "session_id": null,
+    "session_version": 0,
+    "state": "IDLE"
+  },
+  "current_command": {
+    "schema_version": 1,
+    "message_id": "2651702c-0548-49a0-8dc9-20e9c954cdbf",
+    "command_id": "68051dae-f3a8-4b47-80c3-7b5d279bd2d7",
+    "device_id": "esp32-001",
+    "boot_id": "912c9dc9-1387-4a00-9db0-e123783b89f5",
+    "occurred_at": "2026-11-20T18:00:12Z",
+    "expires_at": "2026-11-20T18:00:42Z",
+    "action": "START",
+    "session_id": "ef0a17ef-aa92-4920-823f-891b01ce1fb9",
+    "session_version": 6
+  },
+  "current_ack": {
+    "schema_version": 1,
+    "message_id": "75f9fd6a-ac81-4313-a1e5-9514cd95c690",
+    "command_id": "68051dae-f3a8-4b47-80c3-7b5d279bd2d7",
+    "device_id": "esp32-001",
+    "boot_id": "912c9dc9-1387-4a00-9db0-e123783b89f5",
+    "occurred_at": "2026-11-20T18:00:13Z",
+    "accepted": true,
+    "reason": "APPLIED",
+    "session_id": "ef0a17ef-aa92-4920-823f-891b01ce1fb9",
+    "session_version": 6,
+    "state": "ACTIVE"
+  },
+  "current_reading": {
+    "schema_version": 1,
+    "message_id": "35d08f73-9d22-4b6b-933f-5b2983f27675",
+    "device_id": "esp32-001",
+    "boot_id": "912c9dc9-1387-4a00-9db0-e123783b89f5",
+    "occurred_at": "2026-11-20T18:00:15Z",
+    "sampled_at": "2026-11-20T18:00:14Z",
+    "sequence_number": 0,
+    "session_id": "ef0a17ef-aa92-4920-823f-891b01ce1fb9",
+    "session_version": 6,
+    "heart_rate_bpm": 90,
+    "respiratory_rate_rpm": 18,
+    "temperature_c": 37.1
+  },
+  "late_delivery": {
+    "message_id": "bfb2d0c2-7b0c-4971-81fa-afd309c76b57",
+    "received_at": "2026-11-20T18:00:16Z"
+  }
+}
