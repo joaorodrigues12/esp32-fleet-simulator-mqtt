@@ -67,6 +67,12 @@ class CommandHandler:
         self._boot_id: UUID | None = None
         self._machine: SessionStateMachine | None = None
 
+    def binding_for_boot(self, boot_id: UUID) -> SessionBinding:
+        """Obtém o vínculo imutável disponível no boot que está amostrando."""
+        if self._boot_id == boot_id and self._machine is not None:
+            return self._machine.binding
+        return SessionBinding()
+
     def handle(
         self, payload: bytes, boot_id: UUID, *, now: datetime | None = None
     ) -> CommandReplies | None:
