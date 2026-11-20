@@ -1,4 +1,4 @@
-"""Testa a telemetria com um broker Mosquitto isolado e reiniciável."""
+"""Testa telemetria e presença com um broker Mosquitto isolado."""
 
 import asyncio
 import json
@@ -11,6 +11,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import aiomqtt
@@ -34,13 +35,13 @@ def mosquitto_executable() -> str:
 
 
 @contextmanager
-def _broker(executable: str, config: Path) -> Iterator[subprocess.Popen[bytes]]:
-    # O teste gerencia apenas o processo que iniciou, em uma porta exclusiva.
+def _running_process(args: list[str], log_path: Path) -> Iterator[subprocess.Popen[bytes]]:
+    # O teste termina apenas o processo isolado que iniciou.
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     with (
-        config.with_suffix(".log").open("ab") as log,
+        log_path.open("ab") as log,
         subprocess.Popen(
-            [executable, "-c", str(config)],
+            args,
             stdout=log,
             stderr=subprocess.STDOUT,
             creationflags=flags,
@@ -56,6 +57,24 @@ def _broker(executable: str, config: Path) -> Iterator[subprocess.Popen[bytes]]:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=5)
+
+
+@contextmanager
+def _broker(executable: str, config: Path) -> Iterator[subprocess.Popen[bytes]]:
+    with _running_process([executable, "-c", str(config)], config.with_suffix(".log")) as process:
+        yield process
+
+
+@pytest.fixture
+def mosquitto_config(unused_tcp_port: int, tmp_path: Path) -> Path:
+    """Isola cada instância do broker em uma porta de loopback."""
+    config = tmp_path / "mosquitto.conf"
+    config.write_text(
+        f"listener {unused_tcp_port} 127.0.0.1\n"
+        "allow_anonymous true\npersistence false\nlog_dest stdout\n",
+        encoding="utf-8",
+    )
+    return config
 
 
 async def _wait_for_broker(process: subprocess.Popen[bytes], port: int, config: Path) -> None:
@@ -120,17 +139,127 @@ async def _verify_delivery(
 
 
 def test_publish_before_and_after_mosquitto_restart(
-    mosquitto_executable: str, unused_tcp_port: int, tmp_path: Path
+    mosquitto_executable: str, unused_tcp_port: int, mosquitto_config: Path
 ) -> None:
     """Entrega duas amostras no tópico esperado, uma após reiniciar o Mosquitto."""
-    config = tmp_path / "mosquitto.conf"
-    config.write_text(
-        f"listener {unused_tcp_port} 127.0.0.1\n"
-        "allow_anonymous true\npersistence false\nlog_dest stdout\n",
-        encoding="utf-8",
-    )
     # O aiomqtt registra leitores de socket, disponíveis no loop Selector.
     asyncio.run(
-        _verify_recovery(mosquitto_executable, unused_tcp_port, config),
+        _verify_recovery(mosquitto_executable, unused_tcp_port, mosquitto_config),
+        loop_factory=asyncio.SelectorEventLoop,
+    )
+
+
+_STATUS_TOPIC = "vitals/esp32-001/status"
+_COMMAND_TOPIC = "vitals/esp32-001/command"
+
+
+async def _read_status(client: aiomqtt.Client, *, retained: bool = False) -> dict[str, Any]:
+    message = await asyncio.wait_for(anext(client.messages), timeout=6)
+    assert message.topic.matches(_STATUS_TOPIC)
+    assert message.qos == 1 and message.retain == retained
+    assert isinstance(message.payload, bytes)
+    status = json.loads(message.payload)
+    assert isinstance(status, dict)
+    assert status["schema_version"] == 1 and status["device_id"] == "esp32-001"
+    return status
+
+
+async def _read_retained_status(port: int) -> dict[str, Any]:
+    async with aiomqtt.Client("127.0.0.1", port, timeout=2.0) as newcomer:
+        await newcomer.subscribe(_STATUS_TOPIC, qos=1)
+        return await _read_status(newcomer, retained=True)
+
+
+async def _verify_graceful_presence(executable: str, port: int, config: Path) -> None:
+    commands: asyncio.Queue[aiomqtt.Message] = asyncio.Queue()
+    with _broker(executable, config) as process:
+        await _wait_for_broker(process, port, config)
+        async with aiomqtt.Client("127.0.0.1", port, timeout=2.0) as observer:
+            await observer.subscribe(_STATUS_TOPIC, qos=1)
+            async with MqttConnection(
+                "esp32-001", port=port, on_command=commands.put_nowait, heartbeat_interval_seconds=1
+            ) as publisher:
+                online = await _read_status(observer)
+                assert (online["state"], online["reason"]) == ("online", "connected")
+                assert online["boot_id"] == str(publisher.boot_id)
+                latest_online = await _read_retained_status(port)
+                assert latest_online["state"] == "online"
+                assert latest_online["boot_id"] == online["boot_id"]
+
+                await observer.publish(_COMMAND_TOPIC, b"{}", qos=1)
+                command = await asyncio.wait_for(commands.get(), timeout=3)
+                assert command.topic.matches(_COMMAND_TOPIC) and command.payload == b"{}"
+
+                heartbeat = await _read_status(observer)
+                assert heartbeat["reason"] == "connected"
+                assert heartbeat["boot_id"] == online["boot_id"]
+                assert heartbeat["message_id"] != online["message_id"]
+                assert heartbeat["heartbeat_interval_seconds"] == 1
+
+            # Um heartbeat já confirmado pode continuar na fila quando o contexto fecha.
+            async with asyncio.timeout(6):
+                while (offline := await _read_status(observer))["state"] == "online":
+                    assert offline["boot_id"] == online["boot_id"]
+            assert (offline["state"], offline["reason"]) == ("offline", "graceful_shutdown")
+            assert offline["boot_id"] == online["boot_id"]
+            assert await _read_retained_status(port) == offline
+
+
+def test_presence_heartbeat_commands_and_graceful_shutdown(
+    mosquitto_executable: str, unused_tcp_port: int, mosquitto_config: Path
+) -> None:
+    """Verifica comandos e status retidos durante a conexão e o desligamento normal."""
+    asyncio.run(
+        _verify_graceful_presence(mosquitto_executable, unused_tcp_port, mosquitto_config),
+        loop_factory=asyncio.SelectorEventLoop,
+    )
+
+
+_PUBLISHER_SCRIPT = """
+import asyncio
+import sys
+from esp32_fleet.mqtt.connection import MqttConnection
+
+async def main():
+    async with MqttConnection("esp32-001", port=int(sys.argv[1]), on_command=lambda message: None):
+        await asyncio.Event().wait()
+
+asyncio.run(main(), loop_factory=asyncio.SelectorEventLoop)
+"""
+
+
+async def _verify_last_will(executable: str, port: int, config: Path) -> None:
+    with _broker(executable, config) as process:
+        await _wait_for_broker(process, port, config)
+        async with aiomqtt.Client("127.0.0.1", port, timeout=2.0) as observer:
+            await observer.subscribe(_STATUS_TOPIC, qos=1)
+            args = [sys.executable, "-c", _PUBLISHER_SCRIPT, str(port)]
+            publisher_log = config.with_name("publisher.log")
+            with _running_process(args, publisher_log) as publisher:
+                try:
+                    online = await _read_status(observer)
+                except TimeoutError:
+                    pytest.fail(publisher_log.read_text(encoding="utf-8", errors="replace"))
+                assert (online["state"], online["reason"]) == ("online", "connected")
+                # A interrupção do processo impede a publicação do offline normal.
+                publisher.kill()
+                publisher.wait(timeout=5)
+
+            lost = await _read_status(observer)
+            assert (lost["state"], lost["reason"]) == ("offline", "unexpected_disconnect")
+            assert lost["boot_id"] == online["boot_id"]
+            assert lost["message_id"] != online["message_id"]
+            assert datetime.fromisoformat(lost["occurred_at"]) <= datetime.fromisoformat(
+                online["occurred_at"]
+            )
+            assert await _read_retained_status(port) == lost
+
+
+def test_mosquitto_publishes_retained_last_will_after_process_is_killed(
+    mosquitto_executable: str, unused_tcp_port: int, mosquitto_config: Path
+) -> None:
+    """Confirma que o broker mantém o LWT após a interrupção do publicador."""
+    asyncio.run(
+        _verify_last_will(mosquitto_executable, unused_tcp_port, mosquitto_config),
         loop_factory=asyncio.SelectorEventLoop,
     )

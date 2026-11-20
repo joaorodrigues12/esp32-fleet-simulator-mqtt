@@ -4,7 +4,7 @@ Simulador independente de dispositivos ESP32 virtuais que publicará sinais fisi
 
 ## Estado atual
 
-O projeto gera sinais vitais sintéticos e publica telemetria MQTT para um dispositivo por conexão. A CLI, a presença do dispositivo e as sessões fazem parte das próximas entregas.
+O projeto gera sinais vitais sintéticos e publica telemetria e presença MQTT para um dispositivo por conexão. A CLI e as sessões fazem parte das próximas entregas.
 
 ## Pré-requisitos planejados
 
@@ -69,20 +69,28 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from aiomqtt import Message
+
 from esp32_fleet.domain.vitals import VitalsGenerator
 from esp32_fleet.mqtt.connection import MqttConnection
 
 
+def on_command(message: Message) -> None:
+    print(f"Comando recebido em {message.topic}")
+
+
 async def main() -> None:
     device_id = "esp32-001"
-    async with MqttConnection(device_id) as connection:
+    async with MqttConnection(device_id, on_command=on_command) as connection:
+        boot_id = connection.boot_id
+        assert boot_id is not None
         sample = VitalsGenerator(seed=42).generate()
         now = datetime.now(UTC).isoformat()
         payload = {
             "schema_version": 1,
             "message_id": str(uuid4()),
             "device_id": device_id,
-            "boot_id": str(uuid4()),
+            "boot_id": str(boot_id),
             "occurred_at": now,
             "sampled_at": now,
             "sequence_number": 0,
@@ -96,15 +104,25 @@ async def main() -> None:
 asyncio.run(main(), loop_factory=asyncio.SelectorEventLoop)
 ```
 
-O exemplo usa `SelectorEventLoop` para compatibilidade com o `aiomqtt` no Windows. A conexão
-é aberta na primeira publicação. Em caso de falha, o transporte tenta enviar novamente os
-mesmos bytes com QoS 1, mantendo o `message_id` para deduplicação pelo consumidor.
-A confirmação do broker pode se perder e causar uma entrega duplicada.
+O exemplo usa `SelectorEventLoop` para compatibilidade com o `aiomqtt` no Windows. Em caso de falha,
+a próxima publicação pode restabelecer a conexão. As tentativas da mesma publicação reutilizam
+os bytes da mensagem, inclusive o `message_id`, para deduplicação pelo consumidor.
 
-Para testar a reconexão, disponibilize `mosquitto` no PATH ou defina
+## Acompanhar presença
+
+Forneça `on_command` para habilitar presença. O dispositivo anuncia `online` após o SUBACK e
+renova o status a cada `heartbeat_interval_seconds`. O callback síncrono recebe a mensagem
+MQTT para encaminhamento rápido. O processamento das sessões será feito em uma etapa própria.
+Em modo exclusivo de telemetria, a conexão abre na primeira publicação.
+
+O status usa QoS 1 e fica retido em `vitals/{device_id}/status`. O encerramento normal confirma
+`offline` antes de desconectar. Em uma queda abrupta do dispositivo, o broker publica o LWT
+retido com o mesmo `boot_id`. Esse identificador muda ao abrir outra conexão.
+
+Para testar reconexão e presença, disponibilize `mosquitto` no PATH ou defina
 `MOSQUITTO_EXECUTABLE` com o caminho absoluto do executável. Rode
 `uv run --locked pytest -q tests/integration/test_mqtt_connection_integration.py`.
-O teste inicia e reinicia seu próprio broker em uma porta local livre.
+Cada teste inicia seu próprio broker em uma porta local livre.
 
 ## Arquitetura e contratos
 
@@ -118,10 +136,9 @@ Consulte o [guia de desenvolvimento](docs/development.md) para reproduzir as ver
 ## Próximas funcionalidades
 
 1. Configuração e CLI.
-2. Presença do dispositivo com status e LWT.
-3. Sessões e confirmação de comandos.
-4. Orquestração de múltiplos dispositivos.
-5. Cenários de falha e testes de carga.
+2. Sessões e confirmação de comandos.
+3. Orquestração de múltiplos dispositivos.
+4. Cenários de falha e testes de carga.
 
 ## Licença
 
