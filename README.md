@@ -9,7 +9,7 @@ Simulador independente de dispositivos ESP32 virtuais que publicará sinais fisi
 ## Pré-requisitos planejados
 
 - Python definido em `.python-version` (3.12.8).
-- `uv` para gerenciamento de ambiente e dependências.
+- `uv` 0.13.9 para gerenciamento de ambiente e dependências, a mesma versão usada pelo CI.
 - Docker e Docker Compose para o broker Mosquitto (a configuração será implementada em branch posterior).
 - Git.
 
@@ -30,13 +30,12 @@ Simulador independente de dispositivos ESP32 virtuais que publicará sinais fisi
 ## Preparação local
 
 ```bash
-uv python install 3.12.8
-uv sync --group dev
-uv run pre-commit install --hook-type pre-commit --hook-type commit-msg
-uv run pre-commit run --all-files
+uv python install
+uv sync --locked --group dev
+uv run --locked pre-commit install --hook-type pre-commit --hook-type commit-msg
 ```
 
-A resolução das dependências exige acesso ao índice de pacotes. `uv.lock` deve ser mantido no repositório após execução bem-sucedida de `uv lock`.
+O `uv` lê a versão do Python de `.python-version` e instala as dependências registradas em `uv.lock`.
 
 ## Arquitetura e contratos
 
@@ -44,7 +43,8 @@ Leia [arquitetura](docs/architecture.md), [contratos](docs/contracts.md) e [ADRs
 
 ## Estratégia Git
 
-Branch principal estável e branches curtas `feature/*` ou `fix/*`. Cada entrega passa por testes, revisão e Pull Request. Este pacote contém histórico Git **local**; não comprova PR nem CI remoto.
+A branch `main` recebe entregas revisadas em pull requests com o CI aprovado.
+Consulte o [guia de desenvolvimento](docs/development.md) para reproduzir as verificações na sua máquina.
 
 ## Próximas funcionalidades
 
@@ -53,7 +53,7 @@ Branch principal estável e branches curtas `feature/*` ou `fix/*`. Cada entrega
 3. Transporte MQTT com reconexão e LWT.
 4. Sessões e confirmação de comandos.
 5. Orquestração de múltiplos dispositivos.
-6. Cenários de falha, carga e CI.
+6. Cenários de falha e testes de carga.
 
 ## Licença
 
