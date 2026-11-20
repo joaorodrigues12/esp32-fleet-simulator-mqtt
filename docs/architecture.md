@@ -1,6 +1,6 @@
 # Arquitetura do ESP32 Fleet Simulator — MQTT
 
-Status: proposta arquitetural aprovada para scaffold; implementação de negócio pendente.
+Status: proposta arquitetural para revisão; implementação de negócio pendente.
 
 ## 1. Objetivo e limites
 
