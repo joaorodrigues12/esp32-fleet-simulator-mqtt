@@ -1,5 +1,7 @@
 """Gerencia telemetria e presença de um dispositivo virtual em MQTT 3.1.1."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import re
@@ -7,13 +9,16 @@ from collections.abc import Callable
 from contextlib import AsyncExitStack, suppress
 from math import isfinite
 from types import TracebackType
-from typing import Self
+from typing import TYPE_CHECKING, Self
 from uuid import UUID, uuid4
 
 import aiomqtt
 
 from esp32_fleet.mqtt.presence import DevicePresence
 from esp32_fleet.mqtt.reconnect import ConnectionPolicy
+
+if TYPE_CHECKING:
+    from esp32_fleet.handlers.commands import CommandReplies
 
 _DEVICE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _LOGGER = logging.getLogger(__name__)
@@ -31,6 +36,7 @@ class MqttConnection:
         policy: ConnectionPolicy | None = None,
         timeout: float = 3.0,
         on_command: Callable[[aiomqtt.Message], None] | None = None,
+        on_session_command: Callable[[bytes, UUID], CommandReplies | None] | None = None,
         heartbeat_interval_seconds: int = 10,
     ) -> None:
         """Configura a publicação de telemetria para um dispositivo.
@@ -43,10 +49,12 @@ class MqttConnection:
             timeout: Tempo em segundos para aguardar confirmações do protocolo.
             on_command: Callback síncrono para encaminhar comandos. Fornecê-lo
                 habilita a assinatura de comandos e os anúncios de presença.
+            on_session_command: Callback que processa um comando e prepara o ACK
+                e o evento de sessão. Também habilita presença.
             heartbeat_interval_seconds: Intervalo entre anúncios de presença.
 
         Raises:
-            ValueError: Se a identificação, porta, timeout ou intervalo forem inválidos.
+            ValueError: Se a configuração for inválida ou ambos os callbacks forem fornecidos.
         """
         if not _DEVICE_ID.fullmatch(device_id):
             raise ValueError("Identificador de dispositivo MQTT inválido.")
@@ -56,6 +64,8 @@ class MqttConnection:
             raise ValueError("O timeout MQTT deve ser positivo e finito.")
         if type(heartbeat_interval_seconds) is not int or heartbeat_interval_seconds < 1:
             raise ValueError("O intervalo de presença deve ser um inteiro positivo.")
+        if on_command is not None and on_session_command is not None:
+            raise ValueError("Configure um único callback de comandos.")
         self._device_id = device_id
         self._topic = f"vitals/{device_id}/data"
         self._hostname = hostname
@@ -63,6 +73,8 @@ class MqttConnection:
         self._policy = policy if policy is not None else ConnectionPolicy()
         self._timeout = timeout
         self._on_command = on_command
+        self._on_session_command = on_session_command
+        self._presence_enabled = on_command is not None or on_session_command is not None
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._lock = asyncio.Lock()
         self._client_scope = AsyncExitStack()
@@ -81,7 +93,7 @@ class MqttConnection:
         async with self._lock:
             if self._active:
                 raise RuntimeError("A conexão MQTT já está em uso.")
-            if self._on_command is not None:
+            if self._presence_enabled:
                 await self._connect_and_publish()
             self._active = True
         return self
@@ -147,10 +159,9 @@ class MqttConnection:
             await asyncio.sleep(delay)
 
     async def _connect(self) -> aiomqtt.Client:
-        handler = self._on_command
         presence = (
             DevicePresence(self._device_id, uuid4(), self._heartbeat_interval_seconds)
-            if handler is not None
+            if self._presence_enabled
             else None
         )
         client = await self._client_scope.enter_async_context(
@@ -164,7 +175,7 @@ class MqttConnection:
                 will=presence.will() if presence is not None else None,
             )
         )
-        if handler is not None and presence is not None:
+        if presence is not None:
             granted = await client.subscribe(f"vitals/{self._device_id}/command", qos=1)
             if len(granted) != 1 or granted[0] != 1:
                 raise aiomqtt.MqttError(
@@ -173,23 +184,44 @@ class MqttConnection:
             await presence.publish(client, "connected")
             self._presence = presence
             self._presence_tasks = (
-                asyncio.create_task(self._forward_commands(client, handler)),
+                asyncio.create_task(self._forward_commands(client, presence.boot_id)),
                 asyncio.create_task(self._send_heartbeats(client, presence)),
             )
         self._client = client
         return client
 
-    async def _forward_commands(
-        self, client: aiomqtt.Client, handler: Callable[[aiomqtt.Message], None]
-    ) -> None:
+    async def _forward_commands(self, client: aiomqtt.Client, boot_id: UUID) -> None:
         try:
             async for message in client.messages:
                 try:
-                    handler(message)
+                    if self._on_command is not None:
+                        self._on_command(message)
+                        continue
+                    if self._on_session_command is None or not isinstance(message.payload, bytes):
+                        continue
+                    if message.retain:
+                        _LOGGER.warning("Comando retido ignorado para %s.", self._device_id)
+                        continue
+                    replies = self._on_session_command(message.payload, boot_id)
                 except Exception:
                     _LOGGER.exception("Falha ao encaminhar um comando de %s.", self._device_id)
+                    continue
+                if replies is not None:
+                    # As respostas usam exclusivamente o cliente que recebeu o comando.
+                    for channel, payload in (("ack", replies.ack), ("session", replies.event)):
+                        if payload is None:
+                            continue
+                        try:
+                            await client.publish(
+                                f"vitals/{self._device_id}/{channel}", payload, qos=1, retain=False
+                            )
+                        except aiomqtt.MqttError:
+                            # O controlador pode repetir o comando após perder a confirmação.
+                            _LOGGER.warning(
+                                "Falha ao confirmar %s de %s.", channel, self._device_id
+                            )
         except aiomqtt.MqttError:
-            _LOGGER.debug("A assinatura de comandos de %s foi interrompida.", self._device_id)
+            _LOGGER.warning("O canal de comandos de %s foi interrompido.", self._device_id)
 
     async def _send_heartbeats(self, client: aiomqtt.Client, presence: DevicePresence) -> None:
         try:
