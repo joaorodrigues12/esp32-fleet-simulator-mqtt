@@ -4,7 +4,7 @@ Simulador independente de dispositivos ESP32 virtuais que publicará sinais fisi
 
 ## Estado atual
 
-**Scaffold arquitetural.** Não há CLI funcional, clientes MQTT nem gerador de dados nesta entrega.
+O gerador de sinais vitais está disponível para uso em código Python. A CLI e a publicação MQTT fazem parte das próximas entregas.
 
 ## Pré-requisitos planejados
 
@@ -37,6 +37,20 @@ uv run --locked pre-commit install --hook-type pre-commit --hook-type commit-msg
 
 O `uv` lê a versão do Python de `.python-version` e instala as dependências registradas em `uv.lock`.
 
+## Gerar sinais vitais sintéticos
+
+Use uma instância de `VitalsGenerator` por série. Cada chamada avança a série e retorna uma amostra
+com frequência cardíaca em bpm, frequência respiratória em respirações por minuto e temperatura em
+graus Celsius. Informe a mesma semente para reproduzir a série em testes.
+
+```python
+from esp32_fleet.domain.vitals import VitalsGenerator
+
+generator = VitalsGenerator(seed=42)
+sample = generator.generate()
+print(sample)
+```
+
 ## Arquitetura e contratos
 
 Leia [arquitetura](docs/architecture.md), [contratos](docs/contracts.md) e [ADRs](docs/adr/).
@@ -49,11 +63,10 @@ Consulte o [guia de desenvolvimento](docs/development.md) para reproduzir as ver
 ## Próximas funcionalidades
 
 1. Configuração e CLI.
-2. Gerador fisiológico com testes.
-3. Transporte MQTT com reconexão e LWT.
-4. Sessões e confirmação de comandos.
-5. Orquestração de múltiplos dispositivos.
-6. Cenários de falha e testes de carga.
+2. Transporte MQTT com reconexão e LWT.
+3. Sessões e confirmação de comandos.
+4. Orquestração de múltiplos dispositivos.
+5. Cenários de falha e testes de carga.
 
 ## Licença
 

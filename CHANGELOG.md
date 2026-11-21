@@ -9,3 +9,4 @@ O formato segue Keep a Changelog e Semantic Versioning.
 
 - Scaffold arquitetural, contratos MQTT e decisões iniciais.
 - Configuração inicial de tipagem, lint e hooks de commit.
+- Gerador de sinais vitais sintéticos com séries reproduzíveis por semente.
