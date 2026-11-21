@@ -4,7 +4,7 @@ Simulador independente de dispositivos ESP32 virtuais que publicará sinais fisi
 
 ## Estado atual
 
-O projeto gera sinais vitais sintéticos, publica telemetria e presença MQTT e responde a comandos de sessão. A CLI e a orquestração da frota fazem parte das próximas entregas.
+O projeto executa um ESP32 virtual pela CLI, gera sinais vitais sintéticos, publica telemetria e presença MQTT e responde a comandos de sessão.
 
 ## Pré-requisitos planejados
 
@@ -36,6 +36,19 @@ uv run --locked pre-commit install --hook-type pre-commit --hook-type commit-msg
 ```
 
 O `uv` lê a versão do Python de `.python-version` e instala as dependências registradas em `uv.lock`.
+
+## Executar um dispositivo virtual
+
+Com o broker local em execução, este comando publica três amostras e encerra:
+
+```bash
+uv run --locked python -m esp32_fleet --device-id esp32-001 --seed 42 --samples 3
+```
+
+O broker padrão é `127.0.0.1:1883`. Use `--broker` e `--port` para indicar outro endereço,
+`--interval` para definir o intervalo em segundos e `--help` para ver todas as opções.
+Para executar continuamente, omita `--samples` e pressione `Ctrl+C` para encerrar.
+Cada amostra guarda o `boot_id` e o vínculo de sessão vigentes no instante da geração.
 
 ## Gerar sinais vitais sintéticos
 
@@ -171,9 +184,8 @@ Consulte o [guia de desenvolvimento](docs/development.md) para reproduzir as ver
 
 ## Próximas funcionalidades
 
-1. Configuração e CLI.
-2. Orquestração de múltiplos dispositivos.
-3. Cenários de falha e testes de carga.
+1. Orquestração de múltiplos dispositivos.
+2. Cenários de falha e testes de carga.
 
 ## Licença
 

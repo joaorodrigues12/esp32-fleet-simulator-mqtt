@@ -14,3 +14,4 @@ O formato segue Keep a Changelog e Semantic Versioning.
 - Presença MQTT com status retido, heartbeat e Last Will, além do encaminhamento de comandos.
 - Máquina de estados de sessão com revisão monotônica, idempotência e isolamento por conexão.
 - Validação de comandos MQTT de sessão e publicação de ACKs e eventos correlacionados.
+- CLI para publicar amostras de um dispositivo virtual com presença e vínculo de sessão.

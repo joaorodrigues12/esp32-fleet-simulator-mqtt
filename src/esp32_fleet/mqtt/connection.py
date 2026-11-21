@@ -131,20 +131,43 @@ class MqttConnection:
             RuntimeError: Se a publicação ocorrer fora do contexto assíncrono.
             aiomqtt.MqttError: Se a publicação falhar após as tentativas configuradas.
         """
-        if not 0 < len(payload) <= 16 * 1024:
-            raise ValueError("O payload de telemetria deve ter entre 1 byte e 16 KiB.")
+        _validate_telemetry_payload(payload)
         async with self._lock:
             if not self._active:
                 raise RuntimeError("Abra o contexto MQTT antes de publicar.")
             await self._connect_and_publish(payload)
 
-    async def _connect_and_publish(self, payload: bytes | None = None) -> None:
+    async def publish_sample(self, sample: Callable[[UUID], bytes]) -> None:
+        """Obtém uma amostra no boot conectado e preserva os bytes nas novas tentativas.
+
+        Args:
+            sample: Função síncrona que serializa a leitura para o boot informado.
+
+        Raises:
+            RuntimeError: Se o contexto com presença não estiver ativo.
+            ValueError: Se a função retornar uma mensagem vazia ou acima de 16 KiB.
+            aiomqtt.MqttError: Se as tentativas de conexão ou publicação falharem.
+        """
+        async with self._lock:
+            if not self._active or not self._presence_enabled:
+                raise RuntimeError("Abra o contexto MQTT com presença antes de gerar amostras.")
+            await self._connect_and_publish(sample=sample)
+
+    async def _connect_and_publish(
+        self, payload: bytes | None = None, *, sample: Callable[[UUID], bytes] | None = None
+    ) -> None:
         delays = self._policy.retry_delays()
         while True:
             try:
                 if any(task.done() for task in self._presence_tasks):
                     await self._disconnect()
                 client = self._client if self._client is not None else await self._connect()
+                if payload is None and sample is not None:
+                    boot_id = self.boot_id
+                    if boot_id is None:
+                        raise RuntimeError("A conexão MQTT não anunciou presença.")
+                    payload = sample(boot_id)
+                    _validate_telemetry_payload(payload)
                 if payload is not None:
                     await client.publish(self._topic, payload, qos=1, retain=False)
                 return
@@ -154,7 +177,9 @@ class MqttConnection:
                 if delay is None:
                     raise
             except asyncio.CancelledError:
-                await self._disconnect()
+                # O contexto ativo ainda pode anunciar offline no encerramento por SIGINT.
+                if self._client is None:
+                    await self._disconnect()
                 raise
             await asyncio.sleep(delay)
 
@@ -246,3 +271,8 @@ class MqttConnection:
             # Uma falha no encerramento de um socket perdido não deve impedir a reconexão.
             with suppress(aiomqtt.MqttError):
                 await self._client_scope.aclose()
+
+
+def _validate_telemetry_payload(payload: bytes) -> None:
+    if not 0 < len(payload) <= 16 * 1024:
+        raise ValueError("O payload de telemetria deve ter entre 1 byte e 16 KiB.")
