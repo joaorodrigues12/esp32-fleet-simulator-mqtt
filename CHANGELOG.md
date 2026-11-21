@@ -15,3 +15,4 @@ O formato segue Keep a Changelog e Semantic Versioning.
 - Máquina de estados de sessão com revisão monotônica, idempotência e isolamento por conexão.
 - Validação de comandos MQTT de sessão e publicação de ACKs e eventos correlacionados.
 - CLI para publicar amostras de um dispositivo virtual com presença e vínculo de sessão.
+- Orquestração de múltiplos dispositivos com conexões, sessões e séries independentes.

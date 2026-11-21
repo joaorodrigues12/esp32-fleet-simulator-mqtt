@@ -1,4 +1,4 @@
-"""Inicia um dispositivo virtual com python -m esp32_fleet."""
+"""Inicia a frota virtual com python -m esp32_fleet."""
 
 import asyncio
 import sys
@@ -7,7 +7,7 @@ from collections.abc import Sequence
 import aiomqtt
 
 from esp32_fleet.config.settings import parse_settings
-from esp32_fleet.orchestration.application import run_device
+from esp32_fleet.orchestration.fleet import run_fleet
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -15,7 +15,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     settings = parse_settings(argv)
     try:
         # O aiomqtt precisa de leitores de socket, inclusive no Windows.
-        asyncio.run(run_device(settings), loop_factory=asyncio.SelectorEventLoop)
+        asyncio.run(run_fleet(settings), loop_factory=asyncio.SelectorEventLoop)
     except KeyboardInterrupt:
         return 130
     except ValueError as exc:
