@@ -4,7 +4,7 @@ Simulador independente de dispositivos ESP32 virtuais que publicará sinais fisi
 
 ## Estado atual
 
-O projeto gera sinais vitais sintéticos, publica telemetria e presença MQTT e aplica transições de sessão no domínio. A CLI e o processamento de comandos de sessão via MQTT fazem parte das próximas entregas.
+O projeto gera sinais vitais sintéticos, publica telemetria e presença MQTT e responde a comandos de sessão. A CLI e a orquestração da frota fazem parte das próximas entregas.
 
 ## Pré-requisitos planejados
 
@@ -112,7 +112,7 @@ os bytes da mensagem, inclusive o `message_id`, para deduplicação pelo consumi
 
 Forneça `on_command` para habilitar presença. O dispositivo anuncia `online` após o SUBACK e
 renova o status a cada `heartbeat_interval_seconds`. O callback síncrono recebe a mensagem
-MQTT para encaminhamento rápido. O processamento das sessões será feito em uma etapa própria.
+MQTT para encaminhamento rápido. Use `on_session_command` para processar comandos e publicar as respostas.
 Em modo exclusivo de telemetria, a conexão abre na primeira publicação.
 
 O status usa QoS 1 e fica retido em `vitals/{device_id}/status`. O encerramento normal confirma
@@ -133,6 +133,33 @@ guardar esse vínculo imutável para preservar a associação mesmo depois de tr
 Rode `uv run --locked pytest -q tests/unit/test_sessions.py` para verificar a troca de sessão,
 revisões, expiração, duplicatas e comandos de uma conexão anterior.
 
+## Processar comandos de sessão no Mosquitto
+
+Com o broker em execução, passe `CommandHandler.handle` como callback da conexão. O callback
+valida o JSON em `vitals/{device_id}/command` e aplica a decisão ao `boot_id` receptor.
+
+```python
+import asyncio
+
+from esp32_fleet.handlers.commands import CommandHandler
+from esp32_fleet.mqtt.connection import MqttConnection
+
+
+async def main() -> None:
+    device_id = "esp32-001"
+    handler = CommandHandler(device_id)
+    async with MqttConnection(device_id, on_session_command=handler.handle):
+        await asyncio.Event().wait()
+
+
+asyncio.run(main(), loop_factory=asyncio.SelectorEventLoop)
+```
+
+Envie `START` e `END` com o `boot_id` anunciado em `status`. A conexão publica o ACK em
+`vitals/{device_id}/ack` e os eventos aplicados em `vitals/{device_id}/session`, com QoS 1 e sem
+retenção. Um comando inválido com `command_id` recuperável recebe `INVALID_PAYLOAD`. Use
+`uv run --locked pytest -q tests/integration/test_mqtt_sessions.py` para exercitar o fluxo.
+
 ## Arquitetura e contratos
 
 Leia [arquitetura](docs/architecture.md), [contratos](docs/contracts.md) e [ADRs](docs/adr/).
@@ -145,9 +172,8 @@ Consulte o [guia de desenvolvimento](docs/development.md) para reproduzir as ver
 ## Próximas funcionalidades
 
 1. Configuração e CLI.
-2. Processamento de comandos de sessão e publicação de confirmações MQTT.
-3. Orquestração de múltiplos dispositivos.
-4. Cenários de falha e testes de carga.
+2. Orquestração de múltiplos dispositivos.
+3. Cenários de falha e testes de carga.
 
 ## Licença
 
