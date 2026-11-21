@@ -4,7 +4,7 @@ Simulador independente de dispositivos ESP32 virtuais que publicará sinais fisi
 
 ## Estado atual
 
-O projeto gera sinais vitais sintéticos e publica telemetria e presença MQTT para um dispositivo por conexão. A CLI e as sessões fazem parte das próximas entregas.
+O projeto gera sinais vitais sintéticos, publica telemetria e presença MQTT e aplica transições de sessão no domínio. A CLI e o processamento de comandos de sessão via MQTT fazem parte das próximas entregas.
 
 ## Pré-requisitos planejados
 
@@ -124,6 +124,15 @@ Para testar reconexão e presença, disponibilize `mosquitto` no PATH ou defina
 `uv run --locked pytest -q tests/integration/test_mqtt_connection_integration.py`.
 Cada teste inicia seu próprio broker em uma porta local livre.
 
+## Validação do estado de sessão
+
+`SessionStateMachine` mantém o vínculo em memória por `boot_id`. A instância começa em `IDLE`
+e devolve a decisão e o vínculo vigente para cada comando `START` ou `END`. Uma leitura pode
+guardar esse vínculo imutável para preservar a associação mesmo depois de trocar de sessão.
+
+Rode `uv run --locked pytest -q tests/unit/test_sessions.py` para verificar a troca de sessão,
+revisões, expiração, duplicatas e comandos de uma conexão anterior.
+
 ## Arquitetura e contratos
 
 Leia [arquitetura](docs/architecture.md), [contratos](docs/contracts.md) e [ADRs](docs/adr/).
@@ -136,7 +145,7 @@ Consulte o [guia de desenvolvimento](docs/development.md) para reproduzir as ver
 ## Próximas funcionalidades
 
 1. Configuração e CLI.
-2. Sessões e confirmação de comandos.
+2. Processamento de comandos de sessão e publicação de confirmações MQTT.
 3. Orquestração de múltiplos dispositivos.
 4. Cenários de falha e testes de carga.
 

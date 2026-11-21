@@ -12,3 +12,4 @@ O formato segue Keep a Changelog e Semantic Versioning.
 - Gerador de sinais vitais sintéticos com séries reproduzíveis por semente.
 - Publicação MQTT de telemetria com reconexão e broker Mosquitto para desenvolvimento.
 - Presença MQTT com status retido, heartbeat e Last Will, além do encaminhamento de comandos.
+- Máquina de estados de sessão com revisão monotônica, idempotência e isolamento por conexão.
