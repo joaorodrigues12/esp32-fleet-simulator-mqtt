@@ -14,7 +14,7 @@ Status: proposta inicial versionada. O contrato deve ser revisado antes de imple
 | `vitals/{device_id}/command` | Controlador → dispositivo | 1 | **Não** | `SessionCommandV1` | Evita replay automático de comando antigo após subscribe |
 | `vitals/{device_id}/ack` | Dispositivo → controlador | 1 | Não | `CommandAckV1` | Confirma resultado de comando por ID |
 
-`status` retido representa **último anúncio**, não prova de presença atual em qualquer instante; validar `occurred_at`/heartbeat. `data`, `command`, `session` e `ack` não são retidos. Para estado de sessão após boot, o controlador reconcilia com um novo comando de versão superior. MQTT 3.1.1 é o alvo inicial.
+`status` retido representa o último anúncio. Use o instante de recebimento e o timeout de heartbeat para interpretar presença. Somente `status` é retido. MQTT 3.1.1 é o alvo inicial.
 
 ### Wildcards
 
@@ -29,7 +29,9 @@ Status: proposta inicial versionada. O contrato deve ser revisado antes de imple
 
 Mensagens são JSON UTF-8 de até 16 KiB (limite inicial de aplicação). Valores `NaN`, `Infinity` e numéricos fora da faixa declarada são rejeitados pelo Pydantic. Campos desconhecidos são rejeitados em contratos v1 para prevenir erros silenciosos; acréscimos compatíveis exigem incremento de `schema_version` menor ou nova política de compatibilidade documentada.
 
-Campos comuns: `schema_version` (inteiro, inicialmente `1`), `message_id` (UUID), `device_id` (string), `boot_id` (UUID, criado em cada inicialização do dispositivo) e `occurred_at` (timestamp ISO 8601 UTC). Dados de leitura usam também `sampled_at` para preservar a hora efetiva da medição.
+Campos comuns: `schema_version` (inteiro, inicialmente `1`), `message_id` (UUID), `device_id` (string), `boot_id` (UUID) e `occurred_at` (timestamp ISO 8601 UTC). Dados de leitura usam também `sampled_at` para preservar a hora efetiva da medição.
+
+O `boot_id` identifica o ciclo de comunicação do dispositivo. Gere um UUID antes de cada tentativa de CONNECT, inclusive após uma queda dentro do mesmo processo. Use o mesmo ID no LWT e no `status online` dessa conexão. Um comando aponta para o ciclo de destino. Uma leitura preserva o ciclo em que foi amostrada.
 
 ### `VitalsDataV1`
 
@@ -82,7 +84,7 @@ Exemplo:
 }
 ```
 
-Validações: `action` em `START|END`; `command_id` UUID; `session_id` UUID não nulo para ambos; `session_version` não negativo; `expires_at` UTC posterior a `occurred_at`; `boot_id` deve corresponder à execução atual. Um comando destinado a boot antigo é rejeitado. O controlador obtém `boot_id` por `status` e reenvia comando fresco após reconexão/reinicialização.
+Validações: `action` em `START|END`; `command_id` UUID; `session_id` UUID não nulo para ambos; `session_version` não negativo; `expires_at` UTC posterior a `occurred_at`. O `boot_id` deve corresponder à conexão atual. Um comando destinado a outra conexão recebe `INVALID_BOOT`, mesmo dentro do prazo de validade.
 
 ### `SessionEventV1`
 
@@ -98,9 +100,24 @@ Campos: envelope comum, `state` (`online|offline`), `reason` (`connected|gracefu
 
 ## 3. Sessões, idempotência e ordenação
 
-A fonte autoritativa de vínculo paciente/dispositivo e a restrição de uma sessão ativa é o VetMonitor, não o simulador. O simulador mantém apenas a sessão de referência em memória. `START` exige estado `IDLE`; `END` exige correspondência com a sessão ativa. Uma revisão (`session_version`) maior acompanha cada comando aplicado. Duplicação do mesmo `command_id` retorna `DUPLICATE` sem reaplicar efeitos. Revisões antigas são rejeitadas. O receptor deve deduplicar `message_id` e tratar leituras fora de ordem com `(device_id, boot_id, sequence_number)`.
+O VetMonitor é a fonte autoritativa do vínculo entre dispositivo e paciente e mantém no máximo uma sessão ativa por dispositivo. O controlador mantém a revisão monotônica por `device_id`, inclusive após mudança de `boot_id`. Ele reserva uma revisão maior para cada novo comando. O dispositivo mantém o vínculo de referência e a última revisão aplicada em memória durante a conexão. A revisão local começa em zero.
 
-A operação `END` encerra imediatamente a emissão de novas leituras associadas à sessão antiga; leituras já amostradas e atrasadas preservam o `session_id` antigo. Não há garantia de ordenação entre tópicos diferentes. Se uma confirmação for perdida, o controlador usa `ack` + consulta/reconciliação de estado no seu próprio backend; o simulador não fornece armazenamento durável.
+- `START` em `IDLE` associa a sessão. Em `ACTIVE`, um `START` de revisão maior para o mesmo `session_id` atualiza a revisão e pode recuperar uma confirmação perdida. Para trocar de sessão com a conexão ativa, confirme `END` da sessão atual antes de enviar o próximo `START`.
+- `END` exige o `session_id` ativo e uma revisão estritamente maior que a última aplicada. Após a aplicação, o dispositivo volta a `IDLE` e as novas leituras ficam sem sessão.
+- Para a conexão atual, uma duplicata de um comando já aplicado devolve `accepted=true` e `DUPLICATE` sem repetir a transição. O ACK contém o estado atual, que pode já ter avançado. Reutilizar um `command_id` conhecido com conteúdo diferente gera `CONFLICT`. Um comando novo expirado recebe `EXPIRED`, e um comando novo de revisão igual ou inferior à última aplicada recebe `STALE_VERSION`.
+
+### Recuperação após reconexão ou reinicialização
+
+1. Ao detectar a perda da conexão, o dispositivo encerra o vínculo local usado para novas amostras e preserva os metadados das leituras já geradas. O VetMonitor decide quando encerrar a sessão clínica.
+2. O dispositivo abre uma conexão com novo `boot_id` e `Clean Session=1`, assina `command` e aguarda o SUBACK. Em seguida publica `status online` com `reason=connected`. A conexão inicia em `IDLE`. Leituras autônomas sem associação usam `session_id: null`. O sinalizador MQTT descarta o estado da sessão de transporte anterior. [MQTT 3.1.1, seção 3.1.2.4](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html)
+3. O VetMonitor reconcilia o par `(device_id, boot_id)` usando o vínculo e a revisão atuais do seu backend. Ele serializa a emissão de novos comandos por dispositivo. Se houver sessão ativa, envia um `START` fresco para esse `boot_id`, com revisão nova. Se o dispositivo estiver sem sessão no backend, ele permanece em `IDLE` até um futuro `START`. Novos anúncios da mesma conexão não geram novas revisões por si só. Um anúncio retido pode indicar o destino para a reconciliação. Confirme a aplicação pelo ACK.
+4. O controlador confirma um `START` com ACK aceito cujo `command_id`, `boot_id`, `session_id` e `session_version` correspondem ao comando pendente e cujo estado é `ACTIVE`. No timeout, pode repetir o mesmo comando enquanto válido e atual. Após expirar, consulta novamente o estado autoritativo antes de emitir outro comando. Se a sessão mudou na mesma conexão, usa o estado retornado pelo dispositivo para concluir `END` da associação anterior antes de `START` da nova. Ao receber outro `boot_id`, descarta os comandos pendentes da conexão antiga.
+
+### Leituras atrasadas
+
+O consumidor deduplica por `message_id` e avalia a ordenação por `(device_id, boot_id, sequence_number)`. A sequência começa novamente a cada conexão. Mensagens de tópicos diferentes podem chegar fora de ordem. Mesmo se uma leitura chegar depois do ACK da nova sessão, o consumidor usa o `session_id`, a revisão e o `sampled_at` originais para validar o vínculo histórico e o intervalo de monitoramento. Uma leitura sem sessão fica fora do histórico do paciente. A chegada de uma leitura nunca altera a sessão ativa.
+
+O [cenário automatizado de referência](../tests/contracts/fixtures/session_recovery.json) inclui uma leitura da sessão A, a reconexão para a sessão B e um comando antigo ainda dentro do prazo, rejeitado por apontar para o `boot_id` anterior.
 
 ## 4. Compatibilidade e evolução
 
@@ -111,7 +128,7 @@ A versão 1 mantém os tópicos `vitals/{device_id}/...` previstos inicialmente.
 - Aceitação de exemplos válidos e rejeição de tipos inválidos, valores extremos e campos desconhecidos.
 - Associação `device_id` do payload com o nível correspondente do tópico.
 - START/END/START entre pacientes com versões crescentes.
-- DUPLICATE, STALE_VERSION, EXPIRED e INVALID_BOOT, reconexão e novo boot.
+- DUPLICATE, STALE_VERSION, EXPIRED e INVALID_BOOT. Em reconexão ou reinicialização, confirmar que o novo `boot_id` impede a aplicação de comandos da conexão anterior.
 - Preservação de `sampled_at` e `session_id` ao atrasar publicação.
 - LWT em queda abrupta e publicação explícita em desligamento limpo.
 - Ausência de replay de comando retido; QoS 1 e idempotência.

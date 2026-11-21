@@ -18,6 +18,7 @@ O projeto simula uma frota de dispositivos ESP32 que envia frequência cardíaca
 | Modelo de payload | JSON + Pydantic: legível e fácil de inspecionar | Protobuf/MessagePack: menor payload, maior custo operacional | **JSON + Pydantic**, com `schema_version` e limites explícitos. |
 | Dependências | Poetry com lockfile | uv com lockfile e distribuição moderna | **uv**, disponível no ambiente de montagem; `uv.lock` é gerado quando houver resolução de dependências. |
 | Sessões | Autoridade no consumidor/orquestrador externo | Autoridade local em cada ESP32 | **Autoridade externa**. O dispositivo valida e confirma mudanças, mas não escolhe o paciente. |
+| Recuperação de sessão | O dispositivo solicita a sessão atual. O pedido dá ao dispositivo controle sobre novas tentativas, mas exige definir uma solicitação no contrato MQTT. | O VetMonitor reconcilia ao receber `status online`. Aproveita os canais existentes e depende de processar o anúncio e confirmar o comando. | **Reconciliação pelo VetMonitor**. Cada conexão tem um `boot_id` próprio, e o controlador obtém o vínculo atual no backend antes de enviar o comando. |
 
 Não há banco de dados nem interface web no simulador. O Mosquitto roda em Docker e não compõe o código Python.
 
@@ -71,24 +72,30 @@ Usar um event loop por processo; cada ESP32 possui uma instância de cliente MQT
 
 A fila de entrada terá limite configurável; comandos não podem ser descartados silenciosamente. Quando a capacidade acabar, registrar erro, interromper processamento da conexão ou aplicar estratégia de rejeição observável. A fila de saída é limitada e não garante persistência em disco. QoS 1 significa entrega ao menos uma vez entre os participantes do protocolo, **não** entrega exatamente uma vez à aplicação. A aplicação usa IDs idempotentes e, quando necessário, reconciliação.
 
-Reconexão: cada dispositivo supervisiona sua conexão; falhas transitórias acionam backoff exponencial com jitter e teto, cancelável no encerramento. Após reconectar, reconstituir assinaturas e publicar `online` somente depois da conexão estabelecida. Verificar a versão real da API do `aiomqtt` ao instalar: versões recentes podem oferecer reconexão integrada, mas a política e os testes continuam sendo responsabilidade de `ConnectionPolicy`. Evitar dois loops de reconexão concorrentes.
+Reconexão: cada dispositivo supervisiona sua conexão; falhas transitórias acionam backoff exponencial com jitter e teto, cancelável no encerramento. Cada nova conexão renova o `boot_id` antes de preparar o LWT. O dispositivo publica `online` depois que o broker confirma a assinatura de comandos. A política de reconexão e os testes ficam a cargo de `ConnectionPolicy`, com um único loop de reconexão por dispositivo.
 
 **Capacidade:** 100 dispositivos x 1 leitura/2 s = 50 publicações de `data`/s em média. O total de mensagens aumenta com status, sessões, acks e cenários. Medir 5 minutos, latências, CPU/RAM, perdas detectadas por `sequence_number`, duplicatas e recuperação. Uma solução com threads continua viável se um consumidor futuro depender intensamente de APIs síncronas; comparar benchmarks antes de mudar o modelo.
 
 ## 6. Ciclo de vida do dispositivo e da sessão
 
-Estados de sessão: `IDLE`, `ACTIVE`. `START` aceito somente de `IDLE`, ou repetido de forma idempotente com mesmo `command_id`. `END` aceito somente quando `session_id` e `session_version` correspondem à sessão vigente. Ao encerrar, mover imediatamente para `IDLE`. A versão é monotônica e fornecida pelo orquestrador externo; comandos com revisão inferior/igual de outro `command_id` são rejeitados. Uma transição válida usa revisão estritamente maior, mesmo após voltar ao estado `IDLE`.
+Estados de sessão: `IDLE`, `ACTIVE`. `START` associa uma sessão em `IDLE` ou atualiza a revisão da mesma sessão em `ACTIVE`. `END` exige o `session_id` ativo e leva a `IDLE`. Cada novo comando aplicado tem revisão estritamente maior que a última aplicada. A recuperação do vínculo e a deduplicação de comandos seguem os [contratos MQTT](contracts.md#3-sessões-idempotência-e-ordenação).
 
 A associação entre `session_id` e paciente está exclusivamente no VetMonitor. O dispositivo virtual nunca recebe nome ou cadastro. A leitura captura `session_id`, `session_version`, `sampled_at` e `sequence_number` **no instante da geração**, não no instante do envio. Uma mensagem antiga não é reatribuída à sessão atual. Leituras emitidas sem sessão contêm `session_id: null`, úteis apenas para testes e não para prontuário. O receptor externo valida o vínculo e o intervalo temporal; o simulador não pode garantir essa verificação.
 
-**Limitação de restart:** o simulador mantém revisão e sessão em memória. Reiniciar o processo elimina esse estado e não permite reconstruir exatamente transições anteriores. O consumidor deve reconciliar a sessão após `boot_id` novo. Não enviar comandos `START` antigos como retained. Persistência local e recuperação forte de sessão são extensões futuras.
+Ao desconectar, `VirtualDevice` libera o vínculo local usado na geração de novas amostras. `SessionStateMachine` começa a nova conexão em `IDLE` e `CommandHandler` valida o `boot_id` antes de consultar a revisão. O VetMonitor pode restabelecer a sessão pelo mesmo fluxo após uma falha de rede ou uma reinicialização. Leituras já geradas mantêm seu `boot_id`, sequência e vínculo, mesmo se publicadas por uma nova conexão. Reiniciar o processo também perde as leituras que ainda estavam no buffer em memória.
 
 ```mermaid
 sequenceDiagram
   participant Control as Orquestrador externo
   participant Broker as Mosquitto
   participant Device as ESP32 virtual
-  Control->>Broker: command START(id, session, version)
+  Device->>Broker: CONNECT com LWT para o novo boot_id
+  Device->>Broker: SUBSCRIBE command
+  Broker-->>Device: SUBACK
+  Device->>Broker: status online(boot_id)
+  Broker->>Control: status online
+  Control->>Control: consulta sessão e revisão atuais
+  Control->>Broker: command START(id, boot_id, session, version)
   Broker->>Device: command START
   Device->>Device: valida, aplica transição idempotente
   Device->>Broker: session (estado confirmado)
