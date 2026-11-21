@@ -18,6 +18,11 @@ O hook `commit-msg` valida a mensagem antes de o Git registrar o commit.
 O GitHub Actions executa o workflow `CI` em pull requests e em pushes para `main` e branches `ci/**`.
 O job `Qualidade e testes` roda em Ubuntu. Ele verifica lint e formatação com Ruff, tipagem com mypy e a suíte com pytest.
 Avisos de depreciação do pytest fazem a etapa de testes falhar.
+O job instala o Mosquitto e configura `MOSQUITTO_EXECUTABLE` com o caminho do executável.
+Os testes de integração iniciam seus próprios brokers em portas temporárias no loopback.
+
+Para incluir a integração na execução local, disponibilize `mosquitto` no PATH ou aponte
+`MOSQUITTO_EXECUTABLE` para o executável. O pytest pula a integração local quando o broker está ausente.
 
 Para reproduzir as verificações localmente, rode os mesmos comandos do CI:
 
@@ -25,7 +30,7 @@ Para reproduzir as verificações localmente, rode os mesmos comandos do CI:
 uv python install
 uv sync --locked --group dev
 uv run --locked pre-commit run --all-files
-uv run --locked pytest -q -W error::pytest.PytestDeprecationWarning
+uv run --locked pytest -v -W error::pytest.PytestDeprecationWarning
 ```
 
 Confira o resultado em **Checks** no pull request ou em **Actions** para um push.
