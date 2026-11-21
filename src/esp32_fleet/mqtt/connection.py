@@ -1,17 +1,22 @@
-"""Publica a telemetria de um dispositivo virtual em MQTT 3.1.1."""
+"""Gerencia telemetria e presença de um dispositivo virtual em MQTT 3.1.1."""
 
 import asyncio
+import logging
 import re
+from collections.abc import Callable
 from contextlib import AsyncExitStack, suppress
 from math import isfinite
 from types import TracebackType
 from typing import Self
+from uuid import UUID, uuid4
 
 import aiomqtt
 
+from esp32_fleet.mqtt.presence import DevicePresence
 from esp32_fleet.mqtt.reconnect import ConnectionPolicy
 
 _DEVICE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+_LOGGER = logging.getLogger(__name__)
 
 
 class MqttConnection:
@@ -25,6 +30,8 @@ class MqttConnection:
         port: int = 1883,
         policy: ConnectionPolicy | None = None,
         timeout: float = 3.0,
+        on_command: Callable[[aiomqtt.Message], None] | None = None,
+        heartbeat_interval_seconds: int = 10,
     ) -> None:
         """Configura a publicação de telemetria para um dispositivo.
 
@@ -34,9 +41,12 @@ class MqttConnection:
             port: Porta TCP do broker.
             policy: Política de reconexão usada em cada publicação.
             timeout: Tempo em segundos para aguardar confirmações do protocolo.
+            on_command: Callback síncrono para encaminhar comandos. Fornecê-lo
+                habilita a assinatura de comandos e os anúncios de presença.
+            heartbeat_interval_seconds: Intervalo entre anúncios de presença.
 
         Raises:
-            ValueError: Se a identificação, a porta ou o timeout forem inválidos.
+            ValueError: Se a identificação, porta, timeout ou intervalo forem inválidos.
         """
         if not _DEVICE_ID.fullmatch(device_id):
             raise ValueError("Identificador de dispositivo MQTT inválido.")
@@ -44,22 +54,36 @@ class MqttConnection:
             raise ValueError("A porta MQTT deve estar entre 1 e 65535.")
         if not (isfinite(timeout) and timeout > 0):
             raise ValueError("O timeout MQTT deve ser positivo e finito.")
+        if type(heartbeat_interval_seconds) is not int or heartbeat_interval_seconds < 1:
+            raise ValueError("O intervalo de presença deve ser um inteiro positivo.")
         self._device_id = device_id
         self._topic = f"vitals/{device_id}/data"
         self._hostname = hostname
         self._port = port
         self._policy = policy if policy is not None else ConnectionPolicy()
         self._timeout = timeout
+        self._on_command = on_command
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._lock = asyncio.Lock()
         self._client_scope = AsyncExitStack()
         self._client: aiomqtt.Client | None = None
+        self._presence: DevicePresence | None = None
+        self._presence_tasks: tuple[asyncio.Task[None], ...] = ()
         self._active = False
 
+    @property
+    def boot_id(self) -> UUID | None:
+        """Retorna o identificador da conexão que anunciou presença, se disponível."""
+        return self._presence.boot_id if self._presence is not None else None
+
     async def __aenter__(self) -> Self:
-        """Abre o escopo de uso. A primeira publicação inicia a conexão."""
-        if self._active:
-            raise RuntimeError("A conexão MQTT já está em uso.")
-        self._active = True
+        """Abre o escopo de uso. Quando habilitada, anuncia presença na entrada."""
+        async with self._lock:
+            if self._active:
+                raise RuntimeError("A conexão MQTT já está em uso.")
+            if self._on_command is not None:
+                await self._connect_and_publish()
+            self._active = True
         return self
 
     async def __aexit__(
@@ -71,7 +95,17 @@ class MqttConnection:
         """Encerra o cliente ativo e impede novas publicações nesse contexto."""
         async with self._lock:
             self._active = False
-            await self._disconnect()
+            try:
+                await self._stop_presence_tasks()
+                if self._presence is not None and self._client is not None:
+                    await self._presence.publish(self._client, "graceful_shutdown")
+            except aiomqtt.MqttError:
+                # Preserva uma exceção do chamador e registra a falha do anúncio final.
+                if exc is None:
+                    raise
+                _LOGGER.warning("Falha ao confirmar o status offline de %s.", self._device_id)
+            finally:
+                await self._disconnect()
 
     async def publish_telemetry(self, payload: bytes) -> None:
         """Publica bytes JSON do contrato com QoS 1 e sem retenção.
@@ -90,34 +124,93 @@ class MqttConnection:
         async with self._lock:
             if not self._active:
                 raise RuntimeError("Abra o contexto MQTT antes de publicar.")
-            delays = self._policy.retry_delays()
-            while True:
-                try:
-                    if self._client is None:
-                        self._client = await self._client_scope.enter_async_context(
-                            aiomqtt.Client(
-                                self._hostname,
-                                self._port,
-                                identifier=f"esp32-fleet-{self._device_id}",
-                                protocol=aiomqtt.ProtocolVersion.V311,
-                                clean_session=True,
-                                timeout=self._timeout,
-                            )
-                        )
-                    await self._client.publish(self._topic, payload, qos=1, retain=False)
-                    return
-                except aiomqtt.MqttError:
+            await self._connect_and_publish(payload)
+
+    async def _connect_and_publish(self, payload: bytes | None = None) -> None:
+        delays = self._policy.retry_delays()
+        while True:
+            try:
+                if any(task.done() for task in self._presence_tasks):
                     await self._disconnect()
-                    delay = next(delays, None)
-                    if delay is None:
-                        raise
-                except asyncio.CancelledError:
-                    await self._disconnect()
+                client = self._client if self._client is not None else await self._connect()
+                if payload is not None:
+                    await client.publish(self._topic, payload, qos=1, retain=False)
+                return
+            except aiomqtt.MqttError:
+                await self._disconnect()
+                delay = next(delays, None)
+                if delay is None:
                     raise
-                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                await self._disconnect()
+                raise
+            await asyncio.sleep(delay)
+
+    async def _connect(self) -> aiomqtt.Client:
+        handler = self._on_command
+        presence = (
+            DevicePresence(self._device_id, uuid4(), self._heartbeat_interval_seconds)
+            if handler is not None
+            else None
+        )
+        client = await self._client_scope.enter_async_context(
+            aiomqtt.Client(
+                self._hostname,
+                self._port,
+                identifier=f"esp32-fleet-{self._device_id}",
+                protocol=aiomqtt.ProtocolVersion.V311,
+                clean_session=True,
+                timeout=self._timeout,
+                will=presence.will() if presence is not None else None,
+            )
+        )
+        if handler is not None and presence is not None:
+            granted = await client.subscribe(f"vitals/{self._device_id}/command", qos=1)
+            if len(granted) != 1 or granted[0] != 1:
+                raise aiomqtt.MqttError(
+                    "O broker não confirmou a assinatura de comandos com QoS 1."
+                )
+            await presence.publish(client, "connected")
+            self._presence = presence
+            self._presence_tasks = (
+                asyncio.create_task(self._forward_commands(client, handler)),
+                asyncio.create_task(self._send_heartbeats(client, presence)),
+            )
+        self._client = client
+        return client
+
+    async def _forward_commands(
+        self, client: aiomqtt.Client, handler: Callable[[aiomqtt.Message], None]
+    ) -> None:
+        try:
+            async for message in client.messages:
+                try:
+                    handler(message)
+                except Exception:
+                    _LOGGER.exception("Falha ao encaminhar um comando de %s.", self._device_id)
+        except aiomqtt.MqttError:
+            _LOGGER.debug("A assinatura de comandos de %s foi interrompida.", self._device_id)
+
+    async def _send_heartbeats(self, client: aiomqtt.Client, presence: DevicePresence) -> None:
+        try:
+            while True:
+                await asyncio.sleep(presence.heartbeat_interval_seconds)
+                await presence.publish(client, "connected")
+        except aiomqtt.MqttError:
+            _LOGGER.warning("Falha ao confirmar o heartbeat de %s.", self._device_id)
+
+    async def _stop_presence_tasks(self) -> None:
+        tasks, self._presence_tasks = self._presence_tasks, ()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _disconnect(self) -> None:
-        self._client = None
-        # Uma falha no encerramento de um socket perdido não deve impedir a reconexão.
-        with suppress(aiomqtt.MqttError):
-            await self._client_scope.aclose()
+        try:
+            await self._stop_presence_tasks()
+        finally:
+            self._client = None
+            self._presence = None
+            # Uma falha no encerramento de um socket perdido não deve impedir a reconexão.
+            with suppress(aiomqtt.MqttError):
+                await self._client_scope.aclose()
