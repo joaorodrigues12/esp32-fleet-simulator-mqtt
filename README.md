@@ -4,7 +4,7 @@ Simulador independente de dispositivos ESP32 virtuais que publicará sinais fisi
 
 ## Estado atual
 
-O projeto executa um ESP32 virtual pela CLI, gera sinais vitais sintéticos, publica telemetria e presença MQTT e responde a comandos de sessão.
+O projeto executa uma frota de ESP32 virtuais pela CLI, gera sinais vitais sintéticos, publica telemetria e presença MQTT e responde a comandos de sessão.
 
 ## Pré-requisitos planejados
 
@@ -49,6 +49,21 @@ O broker padrão é `127.0.0.1:1883`. Use `--broker` e `--port` para indicar out
 `--interval` para definir o intervalo em segundos e `--help` para ver todas as opções.
 Para executar continuamente, omita `--samples` e pressione `Ctrl+C` para encerrar.
 Cada amostra guarda o `boot_id` e o vínculo de sessão vigentes no instante da geração.
+
+## Executar uma frota
+
+```bash
+uv run --locked python -m esp32_fleet --devices 3 --device-id esp32 --seed 42 --samples 4
+```
+
+O comando inicia `esp32-001`, `esp32-002` e `esp32-003` e publica quatro amostras por dispositivo.
+Cada membro mantém sua própria conexão, sequência, sessão e gerador. Com uma semente explícita,
+a frota usa seu valor absoluto como base e soma a posição do dispositivo, começando em zero.
+
+Em modo de frota, `--device-id` é o prefixo dos IDs e seu valor padrão é `esp32`. O modo de
+um dispositivo continua usando `esp32-001` como ID padrão. `Ctrl+C` encerra toda a frota.
+Quando um membro esgota suas tentativas de comunicação, os demais continuam. Se a frota chegar
+ao fim após uma falha, a CLI termina com código 1.
 
 ## Gerar sinais vitais sintéticos
 
@@ -184,8 +199,7 @@ Consulte o [guia de desenvolvimento](docs/development.md) para reproduzir as ver
 
 ## Próximas funcionalidades
 
-1. Orquestração de múltiplos dispositivos.
-2. Cenários de falha e testes de carga.
+1. Cenários de falha e testes de carga.
 
 ## Licença
 

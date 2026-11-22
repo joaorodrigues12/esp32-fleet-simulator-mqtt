@@ -12,6 +12,7 @@ from esp32_fleet.__main__ import main
 from esp32_fleet.config.settings import SimulatorSettings, parse_settings
 from esp32_fleet.mqtt.connection import MqttConnection
 from esp32_fleet.mqtt.reconnect import ConnectionPolicy
+from esp32_fleet.orchestration.fleet import run_fleet
 
 
 def test_cli_defaults_and_custom_settings() -> None:
@@ -44,6 +45,8 @@ def test_cli_defaults_and_custom_settings() -> None:
         ("--interval", "nan"),
         ("--interval", "inf"),
         ("--samples", "-1"),
+        ("--devices", "0"),
+        ("--device-id", "esp32/+"),
     ],
 )
 def test_cli_rejects_invalid_settings(
@@ -62,8 +65,77 @@ def test_cli_maps_keyboard_interrupt_to_exit_130() -> None:
     async def interrupted(settings: SimulatorSettings) -> None:
         raise KeyboardInterrupt
 
-    with patch("esp32_fleet.__main__.run_device", side_effect=interrupted):
+    with patch("esp32_fleet.__main__.run_fleet", side_effect=interrupted):
         assert main([]) == 130
+
+
+def test_cli_rejects_a_prefix_that_makes_device_ids_too_long() -> None:
+    """Valida o tamanho dos IDs completos antes de criar conexões."""
+    with pytest.raises(SystemExit) as exc:
+        parse_settings(["--devices", "2", "--device-id", "a" * 61])
+    assert exc.value.code == 2
+
+
+@pytest.mark.asyncio
+async def test_fleet_assigns_distinct_ids_and_reproducible_seeds() -> None:
+    """Mantém as opções compartilhadas e cria uma configuração por membro."""
+    settings = parse_settings(
+        ["--devices", "3", "--device-id", "frota", "--seed", "-42", "--samples", "2"]
+    )
+
+    with patch("esp32_fleet.orchestration.fleet.run_device") as worker:
+        await run_fleet(settings)
+
+    members = sorted(
+        (call.args[0] for call in worker.await_args_list), key=lambda member: member.device_id
+    )
+    assert [member.device_id for member in members] == ["frota-001", "frota-002", "frota-003"]
+    assert [member.seed for member in members] == [42, 43, 44]
+    assert all(member.devices == 1 and member.samples == 2 for member in members)
+
+
+@pytest.mark.asyncio
+async def test_fleet_reports_failed_member_after_the_others_finish() -> None:
+    """Deixa um membro saudável terminar mesmo após a falha MQTT de outro."""
+    completed: list[str] = []
+
+    async def run_member(settings: SimulatorSettings) -> None:
+        if settings.device_id == "esp32-001":
+            raise aiomqtt.MqttError("tentativas esgotadas")
+        await asyncio.sleep(0)
+        completed.append(settings.device_id)
+
+    with (
+        patch("esp32_fleet.orchestration.fleet.run_device", side_effect=run_member),
+        pytest.raises(aiomqtt.MqttError, match="1 de 2 dispositivos"),
+    ):
+        await run_fleet(parse_settings(["--devices", "2", "--samples", "1"]))
+
+    assert completed == ["esp32-002"]
+
+
+@pytest.mark.asyncio
+async def test_cancelling_fleet_waits_for_every_member_to_close() -> None:
+    """Propaga o cancelamento e aguarda a limpeza de todos os membros."""
+    started: asyncio.Queue[str] = asyncio.Queue()
+    stopped: set[str] = set()
+
+    async def run_member(settings: SimulatorSettings) -> None:
+        started.put_nowait(settings.device_id)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.sleep(0)
+            stopped.add(settings.device_id)
+
+    async with asyncio.timeout(3), asyncio.TaskGroup() as tasks:
+        with patch("esp32_fleet.orchestration.fleet.run_device", side_effect=run_member):
+            fleet = tasks.create_task(run_fleet(parse_settings(["--devices", "2"])))
+            members = {await started.get(), await started.get()}
+            fleet.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await fleet
+    assert stopped == members == {"esp32-001", "esp32-002"}
 
 
 @pytest.mark.asyncio
