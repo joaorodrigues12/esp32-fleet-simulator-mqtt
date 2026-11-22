@@ -6,7 +6,7 @@ Status: proposta arquitetural para revisão; implementação de negócio pendent
 
 O projeto simula uma frota de dispositivos ESP32 que envia frequência cardíaca, frequência respiratória e temperatura para um broker MQTT externo ou local. Ele é um repositório independente do VetMonitor. O simulador não persiste prontuários, não conhece dados identificáveis de pacientes e não oferece um cadastro de pacientes. A associação a pacientes ocorre no consumidor externo, como o VetMonitor, mediante sessões referenciadas por UUID.
 
-**Metas de validação, não garantias:** 100 dispositivos, uma leitura a cada dois segundos, aproximadamente 50 mensagens de telemetria por segundo durante cinco minutos. Medir taxa de entrega, p50/p95, uso de memória, CPU e tempo de recuperação. O cenário clínico é sintético e não deve ser interpretado como dispositivo médico validado.
+**Referência de carga** — Até 50 dispositivos, com uma leitura a cada dois segundos por dispositivo durante cerca de cinco minutos. No teto do ensaio, a taxa nominal é de 25 mensagens de telemetria por segundo. O cenário clínico é sintético e o simulador não tem validação como dispositivo médico.
 
 ## 2. Decisões estruturais e alternativas
 
@@ -74,7 +74,9 @@ A fila de entrada terá limite configurável; comandos não podem ser descartado
 
 Reconexão: cada dispositivo supervisiona sua conexão; falhas transitórias acionam backoff exponencial com jitter e teto, cancelável no encerramento. Cada nova conexão renova o `boot_id` antes de preparar o LWT. O dispositivo publica `online` depois que o broker confirma a assinatura de comandos. A política de reconexão e os testes ficam a cargo de `ConnectionPolicy`, com um único loop de reconexão por dispositivo.
 
-**Capacidade:** 100 dispositivos x 1 leitura/2 s = 50 publicações de `data`/s em média. O total de mensagens aumenta com status, sessões, acks e cenários. Medir 5 minutos, latências, CPU/RAM, perdas detectadas por `sequence_number`, duplicatas e recuperação. Uma solução com threads continua viável se um consumidor futuro depender intensamente de APIs síncronas; comparar benchmarks antes de mudar o modelo.
+**Medição de carga** — Com 50 dispositivos e 150 amostras por dispositivo, o assinante espera 7.500 publicações de `data`. O total de mensagens no broker também inclui status, sessões, ACKs e cenários. O ensaio registra entrega por sequência, duplicatas, vazão e latências p50 e p95. Consulte o [procedimento e o resultado medido](development.md#ensaio-de-carga).
+
+Medições de CPU, memória e tempo de recuperação exigem ensaios próprios. Se um consumidor futuro depender intensamente de APIs síncronas, compare medições antes de adotar threads.
 
 ## 6. Ciclo de vida do dispositivo e da sessão
 
@@ -115,7 +117,7 @@ sequenceDiagram
 - Cada dispositivo usa `client_id` único e previsível dentro do namespace do ambiente; conexões de instâncias distintas não podem compartilhar IDs.
 - Limitar tamanho de payload, taxa, dispositivos, duração da simulação e logs; nunca registrar senha ou dados identificáveis.
 - Relógio: usar UTC e `boot_id` + sequência. Latência de rede e relógios divergentes são limitações medidas; consumidores não devem confiar apenas no timestamp emitido.
-- Testes: schemas, transições, idempotência, reconexão, ordenação, duplicatas, atraso entre sessões, LWT, graceful shutdown e carga de 100 dispositivos.
+- Testes: schemas, transições, idempotência, reconexão, ordenação, duplicatas, atraso entre sessões, LWT, graceful shutdown e carga de até 50 dispositivos.
 
 ## 8. Documentação das decisões
 
