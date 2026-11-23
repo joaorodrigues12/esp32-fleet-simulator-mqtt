@@ -37,6 +37,24 @@ uv run --locked pytest -v -W error::pytest.PytestDeprecationWarning
 
 Confira o resultado em **Checks** no pull request ou em **Actions** para um push.
 
+## Ensaio de recuperação do broker
+
+Com o Mosquitto no PATH ou indicado por `MOSQUITTO_EXECUTABLE`, rode na raiz do projeto.
+
+```console
+uv run --locked pytest -q tests/integration/test_mqtt_fleet_recovery.py
+```
+
+O teste inicia um Mosquitto em uma porta temporária de `127.0.0.1` e confirma
+presença e telemetria dos três dispositivos. Ele interrompe esse processo e
+reinicia o broker na mesma porta após uma breve indisponibilidade, mantendo a
+mesma CLI em execução.
+
+Um novo assinante espera que os três dispositivos anunciem novos `boot_id` e
+publiquem amostras geradas nessas conexões. Uma leitura reenviada com o
+`boot_id` anterior mantém sua identidade de origem. O teste termina quando a
+CLI completa os ciclos configurados e sai com código zero.
+
 ## Ensaio de carga
 
 Com o Mosquitto no PATH ou indicado por `MOSQUITTO_EXECUTABLE`, rode na raiz do projeto o
