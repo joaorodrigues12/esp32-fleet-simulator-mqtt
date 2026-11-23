@@ -139,6 +139,12 @@ os estados e tenta reconectar. Ao reconectar, o broker pode entregar o último
 anúncio retido. O monitor continua após a conclusão ou parada do ensaio até
 alterar a configuração ou fechar a janela.
 
+Na tabela **Dispositivos da frota**, digite um trecho do identificador ou selecione
+um estado MQTT. Os filtros podem ser combinados e abrangem todas as páginas.
+A tabela mantém a posição de cada dispositivo na frota e atualiza os resultados
+conforme chegam novos anúncios. Limpe a busca e selecione **Todos os estados**
+para voltar à lista completa.
+
 O monitor usa o mesmo broker e CA do ensaio. Para usar uma conta com permissão
 de leitura em `vitals/+/status`, defina `ESP32_FLEET_MQTT_MONITOR_USERNAME` e
 `ESP32_FLEET_MQTT_MONITOR_PASSWORD` em conjunto. No perfil TLS de exemplo,
