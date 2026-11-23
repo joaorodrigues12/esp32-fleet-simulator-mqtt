@@ -16,9 +16,11 @@ O hook `commit-msg` valida a mensagem antes de o Git registrar o commit.
 ## GitHub e CI
 
 O GitHub Actions executa o workflow `CI` em pull requests e em pushes para `main` e branches `ci/**`.
-O job `Qualidade e testes` roda em Ubuntu. Ele verifica lint e formatação com Ruff, tipagem com mypy e a suíte com pytest.
+O job `Qualidade e testes` roda no Ubuntu 24.04 e `Qualidade e testes (Windows)` roda no Windows Server 2025.
+Ambos verificam lint e formatação com Ruff, tipagem com mypy e a suíte com pytest.
 Avisos de depreciação do pytest fazem a etapa de testes falhar.
-O job instala o Mosquitto e configura `MOSQUITTO_EXECUTABLE` com o caminho do executável.
+O Ubuntu instala o Mosquitto via APT. O Windows usa o pacote oficial x64, verifica seu SHA-256 e extrai os arquivos para o diretório temporário do runner.
+Cada job configura `MOSQUITTO_EXECUTABLE` com o caminho validado antes de rodar a suíte.
 Os testes de integração iniciam seus próprios brokers em portas temporárias no loopback.
 
 Para incluir a integração na execução local, disponibilize `mosquitto` no PATH ou aponte

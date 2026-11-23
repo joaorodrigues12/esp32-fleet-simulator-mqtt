@@ -13,8 +13,16 @@ permissions:
 
 jobs:
   quality:
-    name: Qualidade e testes
-    runs-on: ubuntu-24.04
+    name: ${{ matrix.check_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            check_name: Qualidade e testes
+          - os: windows-2025
+            check_name: Qualidade e testes (Windows)
     steps:
       - name: Baixar o código
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -34,7 +42,8 @@ jobs:
       - name: Verificar lint, formatação e tipos
         run: uv run --locked pre-commit run --all-files
 
-      - name: Instalar Mosquitto para os testes
+      - name: Instalar Mosquitto no Ubuntu
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           sudo apt-get update
@@ -42,6 +51,31 @@ jobs:
           mosquitto_executable="$(command -v mosquitto)"
           test -x "$mosquitto_executable"
           printf 'MOSQUITTO_EXECUTABLE=%s\n' "$mosquitto_executable" >> "$GITHUB_ENV"
+
+      - name: Preparar Mosquitto no Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $package = 'mosquitto-2.1.4-install-windows-x64.exe'
+          $installer = Join-Path $env:RUNNER_TEMP $package
+          $destination = Join-Path $env:RUNNER_TEMP 'mosquitto'
+          Invoke-WebRequest -Uri "https://mosquitto.org/files/binary/win64/$package" -OutFile $installer
+          $expectedHash = '034017C8F8E3B5B86BDBD971F6C5184370311058E4DE7B96A0F10204BBB9E7C8'
+          if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne $expectedHash) {
+            throw 'O SHA-256 do pacote do Mosquitto diverge do esperado.'
+          }
+
+          # Os testes iniciam o broker em loopback sem instalar um serviço do Windows.
+          $sevenZip = Join-Path $env:ProgramFiles '7-Zip/7z.exe'
+          & $sevenZip x -y "-o$destination" $installer
+          if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao extrair o Mosquitto (7-Zip: $LASTEXITCODE)."
+          }
+          $executable = Join-Path $destination 'mosquitto.exe'
+          if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+            throw 'O pacote extraído não contém mosquitto.exe.'
+          }
+          "MOSQUITTO_EXECUTABLE=$executable" >> $env:GITHUB_ENV
 
       - name: Executar os testes
         run: uv run --locked pytest -v -W error::pytest.PytestDeprecationWarning
