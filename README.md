@@ -132,13 +132,23 @@ e interrompe o processo. A saída da execução exibe os logs e as métricas fin
 **Copiar comando CLI** usa os mesmos parâmetros para executar pelo terminal.
 As variáveis de autenticação e TLS são lidas do ambiente.
 
-A tela acompanha o processo local. Os estados MQTT de cada dispositivo serão
-apresentados na etapa de monitoramento.
+A coluna **Estado MQTT** mostra o último anúncio de cada dispositivo do ensaio
+em `vitals/{device_id}/status`. **Aguardando** indica que o monitor ainda não
+recebeu um anúncio válido. Após perder a conexão com o broker, a janela limpa
+os estados e tenta reconectar. Ao reconectar, o broker pode entregar o último
+anúncio retido. O monitor continua após a conclusão ou parada do ensaio até
+alterar a configuração ou fechar a janela.
+
+O monitor usa o mesmo broker e CA do ensaio. Para usar uma conta com permissão
+de leitura em `vitals/+/status`, defina `ESP32_FLEET_MQTT_MONITOR_USERNAME` e
+`ESP32_FLEET_MQTT_MONITOR_PASSWORD` em conjunto. No perfil TLS de exemplo,
+a conta `controller` tem essa permissão. Se o par estiver ausente, o monitor
+usa as mesmas credenciais do simulador.
 
 Com o Mosquitto disponível, execute os testes da GUI na raiz do projeto.
 
 ```console
-uv run --locked --extra gui pytest -q tests/unit/test_gui_configuration.py tests/integration/test_gui_fleet.py
+uv run --locked --extra gui pytest -q -k gui
 ```
 
 ## Executar um dispositivo virtual

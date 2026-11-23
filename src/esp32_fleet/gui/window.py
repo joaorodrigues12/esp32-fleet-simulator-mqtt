@@ -1,5 +1,6 @@
-"""Tela de configuração, prévia e execução da frota."""
+"""Tela de configuração, execução e acompanhamento da frota."""
 
+import os
 import shlex
 import sys
 from codecs import getincrementaldecoder
@@ -9,7 +10,7 @@ from dataclasses import dataclass
 from io import StringIO
 from secrets import randbits
 
-from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer
+from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer, Slot
 from PySide6.QtGui import QCloseEvent, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from esp32_fleet.config.settings import SimulatorSettings, parse_settings
 from esp32_fleet.domain.vitals import VitalsScenario
+from esp32_fleet.gui.monitor import FleetMonitor, MonitorCredentials
 
 DEVICES_PER_PAGE = 100
 _RESOURCE_WARNING_SIZE = 50
@@ -149,7 +151,7 @@ def cli_command(args: Sequence[str], *, powershell: bool) -> str:
 
 
 class FleetWindow(QMainWindow):
-    """Controla uma execução supervisionada e sua prévia de dispositivos."""
+    """Controla uma execução supervisionada e acompanha seus estados MQTT."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -163,6 +165,10 @@ class FleetWindow(QMainWindow):
         self._stopping = False
         self._timed_out = False
         self._closing = False
+        self._monitor: FleetMonitor | None = None
+        self._monitor_retiring = False
+        self._mqtt_states: dict[str, str] = {}
+        self._state_cells: dict[str, QTableWidgetItem] = {}
         self._decoder = getincrementaldecoder("utf-8")(errors="replace")
 
         self._process = QProcess(self)
@@ -296,7 +302,7 @@ class FleetWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 12, 14, 14)
         heading = QHBoxLayout()
-        title = QLabel("Dispositivos previstos")
+        title = QLabel("Dispositivos da frota")
         title.setObjectName("sectionTitle")
         heading.addWidget(title, 1)
         self._count = QLabel()
@@ -304,10 +310,15 @@ class FleetWindow(QMainWindow):
         heading.addWidget(self._count)
         layout.addLayout(heading)
 
-        self._table = QTableWidget(0, 2)
+        self._monitor_label = QLabel("Monitor MQTT inativo")
+        self._monitor_label.setObjectName("mqttMonitorStatus")
+        self._monitor_label.setWordWrap(True)
+        layout.addWidget(self._monitor_label)
+
+        self._table = QTableWidget(0, 3)
         self._table.setObjectName("devicePreview")
-        self._table.setAccessibleName("Prévia dos identificadores da frota")
-        self._table.setHorizontalHeaderLabels(["Posição", "Identificador MQTT"])
+        self._table.setAccessibleName("Identificadores e estados MQTT da frota")
+        self._table.setHorizontalHeaderLabels(["Posição", "Identificador MQTT", "Estado MQTT"])
         self._table.verticalHeader().hide()
         self._table.horizontalHeader().setDefaultAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -316,6 +327,9 @@ class FleetWindow(QMainWindow):
             0, QHeaderView.ResizeMode.ResizeToContents
         )
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setAlternatingRowColors(True)
@@ -347,6 +361,8 @@ class FleetWindow(QMainWindow):
             broker=self._fields["broker"].text(),
             port=self._fields["port"].text(),
         )
+        self._stop_monitor()
+        self._monitor_label.setText("Monitor MQTT inativo")
         self._args = form.arguments()
         self._page = 0
         try:
@@ -365,11 +381,15 @@ class FleetWindow(QMainWindow):
     def _render_page(self) -> None:
         settings = self._settings
         devices = preview_ids(settings, self._page) if settings is not None else []
+        self._state_cells.clear()
         self._table.setRowCount(len(devices))
         for row, device_id in enumerate(devices):
             position = self._page * DEVICES_PER_PAGE + row + 1
             self._table.setItem(row, 0, QTableWidgetItem(str(position)))
             self._table.setItem(row, 1, QTableWidgetItem(device_id))
+            state = QTableWidgetItem(self._mqtt_states.get(device_id, "Aguardando"))
+            self._table.setItem(row, 2, state)
+            self._state_cells[device_id] = state
         total = settings.devices if settings is not None else 0
         pages = (total + DEVICES_PER_PAGE - 1) // DEVICES_PER_PAGE
         self._count.setText(f"Total: {total}")
@@ -389,7 +409,9 @@ class FleetWindow(QMainWindow):
 
     def _set_actions_running(self, running: bool) -> None:
         self._configuration.setEnabled(not running)
-        self._start.setEnabled(not running and self._settings is not None)
+        self._start.setEnabled(
+            not running and not self._monitor_retiring and self._settings is not None
+        )
         self._stop.setEnabled(running and not self._stopping)
         self._copy.setEnabled(self._settings is not None)
 
@@ -400,8 +422,15 @@ class FleetWindow(QMainWindow):
             self.statusBar().showMessage("Comando CLI copiado.", 3000)
 
     def _start_run(self) -> None:
-        if self._settings is None or self._process.state() != QProcess.ProcessState.NotRunning:
+        settings = self._settings
+        if (
+            settings is None
+            or self._monitor_retiring
+            or self._process.state() != QProcess.ProcessState.NotRunning
+        ):
             return
+        if self._monitor is None:
+            self._start_monitor(settings)
         self._stopping = False
         self._timed_out = False
         self._decoder.reset()
@@ -412,6 +441,68 @@ class FleetWindow(QMainWindow):
         environment.insert("PYTHONUTF8", "1")
         self._process.setProcessEnvironment(environment)
         self._process.start(sys.executable, ["-u", "-m", "esp32_fleet.gui.worker", *self._args])
+
+    def _start_monitor(self, settings: SimulatorSettings) -> None:
+        try:
+            credentials = MonitorCredentials.resolve(
+                settings,
+                os.environ.get("ESP32_FLEET_MQTT_MONITOR_USERNAME"),
+                os.environ.get("ESP32_FLEET_MQTT_MONITOR_PASSWORD"),
+            )
+        except ValueError as exc:
+            self._monitor_label.setText(str(exc))
+            return
+
+        self._monitor_label.setText("Conectando monitor MQTT…")
+        monitor = FleetMonitor(settings, credentials, self)
+        monitor.connection_changed.connect(self._monitor_connection_changed)
+        monitor.status_received.connect(self._receive_device_state)
+        monitor.finished.connect(self._monitor_finished)
+        monitor.finished.connect(monitor.deleteLater)
+        self._monitor = monitor
+        monitor.start()
+
+    def _stop_monitor(self) -> None:
+        if self._monitor is not None:
+            self._monitor_retiring = True
+            self._monitor.stop()
+        self._clear_mqtt_states()
+
+    def _clear_mqtt_states(self) -> None:
+        self._mqtt_states.clear()
+        for item in self._state_cells.values():
+            item.setText("Aguardando")
+
+    @Slot(bool)
+    def _monitor_connection_changed(self, connected: bool) -> None:
+        if self._monitor_retiring:
+            return
+        if connected:
+            self._monitor_label.setText("Monitor MQTT conectado")
+        else:
+            self._clear_mqtt_states()
+            self._monitor_label.setText("Monitor MQTT desconectado · tentando reconectar")
+
+    @Slot(str, str)
+    def _receive_device_state(self, device_id: str, state: str) -> None:
+        if self._monitor_retiring:
+            return
+        label = "Online" if state == "online" else "Offline"
+        self._mqtt_states[device_id] = label
+        cell = self._state_cells.get(device_id)
+        if cell is not None:
+            cell.setText(label)
+
+    @Slot()
+    def _monitor_finished(self) -> None:
+        if not self._monitor_retiring:
+            self._clear_mqtt_states()
+            self._monitor_label.setText("Monitor MQTT indisponível")
+        self._monitor = None
+        self._monitor_retiring = False
+        self._set_actions_running(self._process.state() != QProcess.ProcessState.NotRunning)
+        if self._closing:
+            QTimer.singleShot(0, self.close)
 
     def _worker_started(self) -> None:
         if self._stopping:
@@ -469,9 +560,11 @@ class FleetWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Solicita a parada antes de fechar uma janela com ensaio ativo."""
-        if self._process.state() != QProcess.ProcessState.NotRunning:
+        running = self._process.state() != QProcess.ProcessState.NotRunning
+        if running or self._monitor is not None:
             self._closing = True
             self._request_stop()
+            self._stop_monitor()
             event.ignore()
         else:
             event.accept()
