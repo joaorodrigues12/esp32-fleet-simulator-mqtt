@@ -7,6 +7,8 @@ O formato segue Keep a Changelog e Semantic Versioning.
 
 ### Added
 
+- Tela desktop opcional para configurar, iniciar e parar ensaios de frota, com prévia de IDs e comando CLI copiável.
+
 - Perfil autenticado do Mosquitto local e suporte a usuário e senha por variáveis de ambiente na CLI.
 - Perfil TLS com validação da identidade do broker e permissões MQTT para as contas `simulator` e `controller`.
 - Limite configurável de comandos em espera por dispositivo, com aviso quando a fila descarta novos comandos.
