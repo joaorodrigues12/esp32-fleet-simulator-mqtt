@@ -1,0 +1,12 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.1.4-alpine
+    ports:
+      - "127.0.0.1:8883:8883"
+    volumes:
+      - ./docker/mosquitto/mosquitto-tls.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./docker/mosquitto/mosquitto.acl:/mosquitto/config/mosquitto.acl:ro
+      - mosquitto-tls:/mosquitto/data
+
+volumes:
+  mosquitto-tls:

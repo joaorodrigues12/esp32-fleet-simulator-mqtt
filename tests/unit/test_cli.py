@@ -2,12 +2,15 @@
 
 import asyncio
 import json
+import ssl
 from collections.abc import AsyncIterator
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import aiomqtt
 import pytest
+import trustme
 
 from esp32_fleet.__main__ import main
 from esp32_fleet.config.settings import SimulatorSettings, parse_settings
@@ -19,9 +22,41 @@ from esp32_fleet.orchestration.fleet import run_fleet
 
 @pytest.fixture(autouse=True)
 def isolate_mqtt_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mantém os testes independentes das credenciais do terminal."""
+    """Mantém os testes independentes da configuração MQTT do terminal."""
     monkeypatch.delenv("ESP32_FLEET_MQTT_USERNAME", raising=False)
     monkeypatch.delenv("ESP32_FLEET_MQTT_PASSWORD", raising=False)
+    monkeypatch.delenv("ESP32_FLEET_MQTT_CA_FILE", raising=False)
+
+
+def test_cli_loads_ca_with_certificate_and_hostname_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Configura o contexto TLS com verificação de certificado e identidade."""
+    ca_path = tmp_path / "ca.pem"
+    trustme.CA().cert_pem.write_to_path(ca_path)
+    monkeypatch.setenv("ESP32_FLEET_MQTT_CA_FILE", str(ca_path))
+    context = parse_settings([]).tls_context
+
+    assert context is not None
+    assert context.check_hostname
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.cert_store_stats()["x509_ca"] == 1
+
+
+@pytest.mark.parametrize("filename", ["", "missing.pem"])
+def test_cli_rejects_invalid_ca(
+    filename: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Trata a CA vazia ou ilegível como erro antes de abrir a conexão."""
+    ca_file = str(tmp_path / filename) if filename else ""
+    monkeypatch.setenv("ESP32_FLEET_MQTT_CA_FILE", ca_file)
+    with pytest.raises(SystemExit) as error:
+        parse_settings([])
+    assert error.value.code == 2
+    assert "ESP32_FLEET_MQTT_CA_FILE" in capsys.readouterr().err
 
 
 def test_cli_reads_credentials_without_showing_password(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -239,6 +274,7 @@ async def test_publish_sample_replays_original_bytes_and_uses_new_boot_next() ->
     first.publish.side_effect = [None, aiomqtt.MqttError("publicação sem confirmação")]
     policy = ConnectionPolicy(max_retries=1, initial_delay=0.001, max_delay=0.001)
     sampled_boots: list[UUID] = []
+    tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     simulated_delay = 0.25
     original_sleep = asyncio.sleep
     delayed_samples = 0
@@ -267,6 +303,7 @@ async def test_publish_sample_replays_original_bytes_and_uses_new_boot_next() ->
             on_command=lambda message: None,
             username="test-device",
             password="synthetic-secret",
+            tls_context=tls_context,
         ) as connection:
             await connection.publish_sample(sample, delay_seconds=simulated_delay)
             await connection.publish_sample(sample)
@@ -276,6 +313,7 @@ async def test_publish_sample_replays_original_bytes_and_uses_new_boot_next() ->
     for call in factory.call_args_list:
         assert call.kwargs["username"] == "test-device"
         assert call.kwargs["password"] == "synthetic-secret"
+        assert call.kwargs["tls_context"] is tls_context
     original, recovered = sampled_boots
     assert original != recovered
     assert first.publish.await_args_list[1].args == (topic, str(original).encode("ascii"))

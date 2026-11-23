@@ -63,6 +63,48 @@ e exige credenciais de cada cliente. Para confirmar a publicação, confira
 `samples_acked: 1` no resumo da CLI. Depois de alterar a senha no volume,
 reinicie o serviço para carregar o arquivo atualizado.
 
+### Usar TLS e permissões por tópico
+
+O perfil `compose.tls.yaml` publica a porta `8883` em `127.0.0.1`. Para um
+ensaio local, gere certificados com a dependência de desenvolvimento `trustme`
+em um diretório fora do repositório. O comando padrão emite um certificado
+válido para `localhost` e `127.0.0.1`.
+
+```console
+mkdir "$HOME/mqtt-tls"
+uv sync --locked --group dev
+uv run --locked python -m trustme --dir "$HOME/mqtt-tls"
+docker compose -f compose.tls.yaml run --rm -v "$HOME/mqtt-tls:/run/tls:ro" mosquitto sh -ec 'umask 077 && cp /run/tls/server.pem /mosquitto/data/server.pem && cp /run/tls/server.key /mosquitto/data/server.key && chmod 600 /mosquitto/data/server.key'
+docker compose -f compose.tls.yaml run --rm mosquitto mosquitto_passwd -c /mosquitto/data/passwords simulator
+docker compose -f compose.tls.yaml run --rm mosquitto mosquitto_passwd /mosquitto/data/passwords controller
+docker compose -f compose.tls.yaml up -d mosquitto
+```
+
+Use `-c` apenas para a primeira criação do arquivo de senhas. Esse arquivo,
+o certificado do servidor e a chave privada ficam em um volume dedicado.
+No PowerShell, os comandos abaixo configuram a conta `simulator` e a CA
+da CLI e publicam uma amostra.
+
+```powershell
+$env:ESP32_FLEET_MQTT_USERNAME = 'simulator'
+$env:ESP32_FLEET_MQTT_PASSWORD = Read-Host 'Senha MQTT do simulador' -MaskInput
+$env:ESP32_FLEET_MQTT_CA_FILE = "$HOME/mqtt-tls/client.pem"
+uv run --locked python -m esp32_fleet --broker 127.0.0.1 --port 8883 --samples 1 --metrics
+```
+
+Em Bash, configure o usuário e a senha no ambiente e exporte
+`ESP32_FLEET_MQTT_CA_FILE="$HOME/mqtt-tls/client.pem"` antes de executar a CLI.
+O valor de `--broker` deve corresponder a uma identidade no certificado.
+
+| Conta | Publica | Recebe |
+| --- | --- | --- |
+| `simulator` | `data`, `status`, `session` e `ack` | `command` |
+| `controller` | `command` | `data`, `status`, `session` e `ack` |
+
+As permissões valem para todos os IDs da frota. Use a conta `controller` em um
+consumidor MQTT com a mesma CA. Em MQTT 3.1.1, verifique a entrega no assinante
+para testar uma permissão de publicação.
+
 ## Estrutura
 
 - `src/esp32_fleet/config` e `orchestration` configuram a CLI e executam a frota.

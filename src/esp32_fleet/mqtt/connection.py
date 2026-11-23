@@ -18,6 +18,8 @@ from esp32_fleet.mqtt.presence import DevicePresence
 from esp32_fleet.mqtt.reconnect import ConnectionPolicy
 
 if TYPE_CHECKING:
+    from ssl import SSLContext
+
     from esp32_fleet.handlers.commands import CommandReplies
     from esp32_fleet.observability.metrics import TelemetryMetrics
 
@@ -36,6 +38,7 @@ class MqttConnection:
         port: int = 1883,
         username: str | None = None,
         password: str | None = None,
+        tls_context: SSLContext | None = None,
         policy: ConnectionPolicy | None = None,
         timeout: float = 3.0,
         on_command: Callable[[aiomqtt.Message], None] | None = None,
@@ -51,6 +54,7 @@ class MqttConnection:
             port: Porta TCP do broker.
             username: Usuário MQTT usado em cada conexão.
             password: Senha MQTT usada em cada conexão.
+            tls_context: Contexto TLS preparado com a CA confiável do broker.
             policy: Política de reconexão usada em cada publicação.
             timeout: Tempo em segundos para aguardar confirmações do protocolo.
             on_command: Callback síncrono para encaminhar comandos. Fornecê-lo
@@ -79,6 +83,7 @@ class MqttConnection:
         self._port = port
         self._username = username
         self._password = password
+        self._tls_context = tls_context
         self._policy = policy if policy is not None else ConnectionPolicy()
         self._timeout = timeout
         self._on_command = on_command
@@ -222,6 +227,7 @@ class MqttConnection:
                 identifier=f"esp32-fleet-{self._device_id}",
                 username=self._username,
                 password=self._password,
+                tls_context=self._tls_context,
                 protocol=aiomqtt.ProtocolVersion.V311,
                 clean_session=True,
                 timeout=self._timeout,

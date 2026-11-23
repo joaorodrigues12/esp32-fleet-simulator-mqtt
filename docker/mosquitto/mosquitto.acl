@@ -1,0 +1,14 @@
+# As contas são separadas por papel e cada papel atende à frota inteira.
+user simulator
+topic write vitals/+/data
+topic write vitals/+/status
+topic write vitals/+/session
+topic write vitals/+/ack
+topic read vitals/+/command
+
+user controller
+topic read vitals/+/data
+topic read vitals/+/status
+topic read vitals/+/session
+topic read vitals/+/ack
+topic write vitals/+/command

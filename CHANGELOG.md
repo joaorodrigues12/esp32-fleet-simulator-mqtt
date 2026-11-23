@@ -8,6 +8,7 @@ O formato segue Keep a Changelog e Semantic Versioning.
 ### Added
 
 - Perfil autenticado do Mosquitto local e suporte a usuário e senha por variáveis de ambiente na CLI.
+- Perfil TLS com validação da identidade do broker e permissões MQTT para as contas `simulator` e `controller`.
 
 ## [0.1.0]
 
