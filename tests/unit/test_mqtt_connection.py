@@ -8,6 +8,7 @@ import pytest
 
 from esp32_fleet.mqtt.connection import MqttConnection
 from esp32_fleet.mqtt.reconnect import ConnectionPolicy
+from esp32_fleet.observability.metrics import TelemetryMetrics
 
 
 def test_backoff_grows_and_caps_the_jitter() -> None:
@@ -40,12 +41,14 @@ async def test_publish_retries_same_payload_on_a_new_client() -> None:
     policy = ConnectionPolicy(max_retries=1, initial_delay=0.001, max_delay=0.001)
     payload = b'{"message_id":"amostra-repetida"}'
     topic = "vitals/esp32-001/data"
+    metrics = TelemetryMetrics("esp32-001")
 
     with patch(
         "esp32_fleet.mqtt.connection.aiomqtt.Client", side_effect=[original, recovered]
     ) as factory:
-        async with MqttConnection("esp32-001", policy=policy) as connection:
+        async with MqttConnection("esp32-001", policy=policy, metrics=metrics) as connection:
             await connection.publish_telemetry(payload)
+            assert metrics.samples_acked == 1
             await connection.publish_telemetry(b"{}")
             assert factory.call_count == 2
 
@@ -55,6 +58,8 @@ async def test_publish_retries_same_payload_on_a_new_client() -> None:
     recovered.publish.assert_awaited_with(topic, b"{}", qos=1, retain=False)
     original.__aexit__.assert_awaited_once()
     recovered.__aexit__.assert_awaited_once()
+    assert metrics.samples_acked == 2
+    assert metrics.mqtt_errors == metrics.reconnections == 1
 
 
 @pytest.mark.asyncio
@@ -63,12 +68,15 @@ async def test_connection_error_is_reported_after_retry_budget() -> None:
     unavailable = AsyncMock(spec=aiomqtt.Client)
     unavailable.__aenter__.side_effect = aiomqtt.MqttError("broker indisponível")
     policy = ConnectionPolicy(max_retries=1, initial_delay=0.001, max_delay=0.001)
+    metrics = TelemetryMetrics("esp32-001")
 
     with patch("esp32_fleet.mqtt.connection.aiomqtt.Client", return_value=unavailable) as factory:
-        async with MqttConnection("esp32-001", policy=policy) as connection:
+        async with MqttConnection("esp32-001", policy=policy, metrics=metrics) as connection:
             with pytest.raises(aiomqtt.MqttError, match="broker indisponível"):
                 await connection.publish_telemetry(b"{}")
         assert factory.call_count == 2
+    assert metrics.mqtt_errors == 2
+    assert metrics.samples_acked == metrics.reconnections == 0
 
 
 @pytest.mark.asyncio

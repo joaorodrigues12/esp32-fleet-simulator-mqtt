@@ -24,6 +24,7 @@ class SimulatorSettings:
     delay_every: int | None = None
     delay_seconds: float = 0.0
     omit_every: int | None = None
+    metrics: bool = False
 
     @property
     def device_number_width(self) -> int:
@@ -58,6 +59,9 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
         "--delay-seconds", type=float, metavar="S", help="Tempo de atraso em segundos."
     )
     parser.add_argument("--omit-every", type=int, metavar="N", help="Omite cada Nª leitura.")
+    parser.add_argument(
+        "--metrics", action="store_true", help="Emite um resumo JSON por dispositivo em stderr."
+    )
     args = parser.parse_args(argv)
 
     broker = args.broker.strip()
@@ -97,6 +101,7 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
         delay_every=args.delay_every,
         delay_seconds=args.delay_seconds if args.delay_seconds is not None else 0.0,
         omit_every=args.omit_every,
+        metrics=args.metrics,
     )
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", device_id):
         parser.error("--device-id deve seguir o formato de identificador MQTT do projeto.")

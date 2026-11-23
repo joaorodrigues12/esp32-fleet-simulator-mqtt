@@ -18,3 +18,4 @@ O formato segue Keep a Changelog e Semantic Versioning.
 - Orquestração de múltiplos dispositivos com conexões, sessões e séries independentes.
 - Seleção de cenários sintéticos pela CLI, com perfil padrão e elevação reproduzível de temperatura.
 - Simulação periódica de atrasos e omissões de telemetria, configurável pela CLI.
+- Resumo JSON opcional por dispositivo com leituras confirmadas, omissões, falhas MQTT e reconexões.

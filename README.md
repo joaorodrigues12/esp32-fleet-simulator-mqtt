@@ -112,6 +112,23 @@ Em uma conexão contínua, o comando publica as sequências `0`, `2` e `4`, com 
 na sequência `2`. Em uma reconexão, a sequência MQTT recomeça no novo `boot_id`
 e a contagem dos ciclos do dispositivo continua.
 
+### Consultar as métricas por dispositivo
+
+Use `--metrics` para receber uma linha JSON em `stderr` quando cada dispositivo
+encerrar, inclusive em caso de falha. As linhas de resumo têm o campo
+`event` igual a `telemetry_metrics` e identificam o dispositivo em `device_id`.
+
+```bash
+uv run --locked python -m esp32_fleet --devices 3 --samples 6 --omit-every 2 --metrics
+```
+
+| Campo | O que conta |
+| --- | --- |
+| `samples_acked` | Leituras confirmadas pelo broker em QoS 1, uma vez por publicação lógica. |
+| `samples_omitted` | Leituras omitidas pela regra `--omit-every`. |
+| `mqtt_errors` | Falhas MQTT observadas em conexão, telemetria, presença ou comandos. Uma interrupção pode gerar várias falhas. |
+| `reconnections` | Conexões bem-sucedidas após a primeira. |
+
 ## Publicar uma amostra no Mosquitto
 
 Execute `docker compose up -d mosquitto`. O broker de desenvolvimento aceita conexões anônimas
