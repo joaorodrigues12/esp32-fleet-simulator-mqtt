@@ -70,7 +70,10 @@ sessão em sequência. Um lock serializa a publicação de telemetria e a troca 
 Cada dispositivo aguarda a confirmação da leitura atual antes de seguir para o próximo
 ciclo. Durante uma tentativa de recuperação, o payload pendente fica em memória.
 QoS 1 permite duplicatas, e o consumidor pode deduplicar pelo `message_id`.
-Limites de fila e políticas de saturação ficam para uma evolução do simulador.
+A fila de comandos de cada cliente MQTT tem capacidade de 128 mensagens por padrão,
+configurável por `--command-queue-size`. O comando em processamento fica fora
+da fila. Quando a fila lota, o `aiomqtt` avisa e descarta as mensagens que chegam
+até abrir espaço. O controlador usa o ACK de aplicação para confirmar o comando.
 
 Reconexão: cada dispositivo supervisiona sua conexão; falhas transitórias acionam backoff exponencial com jitter e teto, cancelável no encerramento. Cada nova conexão renova o `boot_id` antes de preparar o LWT. O dispositivo publica `online` depois que o broker confirma a assinatura de comandos. A política de reconexão e os testes ficam a cargo de `ConnectionPolicy`, com um único loop de reconexão por dispositivo.
 

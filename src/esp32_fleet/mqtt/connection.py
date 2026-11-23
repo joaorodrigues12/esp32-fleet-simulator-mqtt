@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from esp32_fleet.handlers.commands import CommandReplies
     from esp32_fleet.observability.metrics import TelemetryMetrics
 
+DEFAULT_COMMAND_QUEUE_SIZE = 128
 _DEVICE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class MqttConnection:
         on_command: Callable[[aiomqtt.Message], None] | None = None,
         on_session_command: Callable[[bytes, UUID], CommandReplies | None] | None = None,
         heartbeat_interval_seconds: int = 10,
+        command_queue_size: int = DEFAULT_COMMAND_QUEUE_SIZE,
         metrics: TelemetryMetrics | None = None,
     ) -> None:
         """Configura a publicação de telemetria para um dispositivo.
@@ -62,6 +64,8 @@ class MqttConnection:
             on_session_command: Callback que processa um comando e prepara o ACK
                 e o evento de sessão. Também habilita presença.
             heartbeat_interval_seconds: Intervalo entre anúncios de presença.
+            command_queue_size: Capacidade dos comandos que aguardam processamento.
+                O cliente MQTT avisa e descarta novos comandos quando a fila lota.
             metrics: Contadores opcionais compartilhados com o ciclo do dispositivo.
 
         Raises:
@@ -75,6 +79,8 @@ class MqttConnection:
             raise ValueError("O timeout MQTT deve ser positivo e finito.")
         if type(heartbeat_interval_seconds) is not int or heartbeat_interval_seconds < 1:
             raise ValueError("O intervalo de presença deve ser um inteiro positivo.")
+        if type(command_queue_size) is not int or command_queue_size < 1:
+            raise ValueError("O tamanho da fila de comandos deve ser um inteiro positivo.")
         if on_command is not None and on_session_command is not None:
             raise ValueError("Configure um único callback de comandos.")
         self._device_id = device_id
@@ -90,6 +96,7 @@ class MqttConnection:
         self._on_session_command = on_session_command
         self._presence_enabled = on_command is not None or on_session_command is not None
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._command_queue_size = command_queue_size
         self._metrics = metrics
         self._lock = asyncio.Lock()
         self._client_scope = AsyncExitStack()
@@ -230,6 +237,7 @@ class MqttConnection:
                 tls_context=self._tls_context,
                 protocol=aiomqtt.ProtocolVersion.V311,
                 clean_session=True,
+                max_queued_incoming_messages=self._command_queue_size,
                 timeout=self._timeout,
                 will=presence.will() if presence is not None else None,
             )
