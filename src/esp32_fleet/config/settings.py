@@ -13,6 +13,48 @@ from esp32_fleet.mqtt.connection import DEFAULT_COMMAND_QUEUE_SIZE
 
 
 @dataclass(frozen=True, slots=True)
+class MqttSettings:
+    """Opções compartilhadas para conectar um produtor ou consumidor MQTT."""
+
+    broker: str
+    port: int
+    username: str | None
+    password: str | None = field(repr=False)
+    tls_context: ssl.SSLContext | None = field(repr=False)
+
+
+def add_mqtt_arguments(parser: argparse.ArgumentParser) -> None:
+    """Registra as opções de endereço usadas pelas duas interfaces de terminal."""
+    parser.add_argument("--broker", default="127.0.0.1", help="Host do broker MQTT.")
+    parser.add_argument("--port", type=int, default=1883, help="Porta TCP do broker.")
+
+
+def parse_mqtt_options(parser: argparse.ArgumentParser, args: argparse.Namespace) -> MqttSettings:
+    """Valida o endereço e carrega as credenciais e a CA do ambiente."""
+    username = os.environ.get("ESP32_FLEET_MQTT_USERNAME") or None
+    password = os.environ.get("ESP32_FLEET_MQTT_PASSWORD") or None
+    if (username is None) != (password is None):
+        parser.error("Defina ESP32_FLEET_MQTT_USERNAME e ESP32_FLEET_MQTT_PASSWORD em conjunto.")
+
+    tls_context = None
+    ca_file = os.environ.get("ESP32_FLEET_MQTT_CA_FILE")
+    if ca_file is not None:
+        if not ca_file:
+            parser.error("ESP32_FLEET_MQTT_CA_FILE deve indicar um arquivo de CA.")
+        try:
+            tls_context = ssl.create_default_context(cafile=ca_file)
+        except OSError:
+            parser.error("ESP32_FLEET_MQTT_CA_FILE deve indicar um arquivo de CA válido e legível.")
+
+    broker = args.broker.strip()
+    if not broker:
+        parser.error("--broker deve informar o host do broker.")
+    if not 1 <= args.port <= 65535:
+        parser.error("--port deve estar entre 1 e 65535.")
+    return MqttSettings(broker, args.port, username, password, tls_context)
+
+
+@dataclass(frozen=True, slots=True)
 class SimulatorSettings:
     """Opções de conexão, cadência, frota, perfil dos sinais e falhas simuladas."""
 
@@ -45,8 +87,7 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
         prog="python -m esp32_fleet",
         description="Publica sinais vitais sintéticos de uma frota de ESP32 virtuais.",
     )
-    parser.add_argument("--broker", default="127.0.0.1", help="Host do broker MQTT.")
-    parser.add_argument("--port", type=int, default=1883, help="Porta TCP do broker.")
+    add_mqtt_arguments(parser)
     parser.add_argument("--device-id", help="Identificador único ou prefixo dos IDs da frota.")
     parser.add_argument("--devices", type=int, default=1, help="Quantidade de dispositivos.")
     parser.add_argument("--interval", type=float, default=2.0, help="Intervalo em segundos.")
@@ -77,27 +118,7 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
         help=f"Comandos em espera por dispositivo. Padrão: {DEFAULT_COMMAND_QUEUE_SIZE}.",
     )
     args = parser.parse_args(argv)
-
-    username = os.environ.get("ESP32_FLEET_MQTT_USERNAME") or None
-    password = os.environ.get("ESP32_FLEET_MQTT_PASSWORD") or None
-    if (username is None) != (password is None):
-        parser.error("Defina ESP32_FLEET_MQTT_USERNAME e ESP32_FLEET_MQTT_PASSWORD em conjunto.")
-
-    tls_context = None
-    ca_file = os.environ.get("ESP32_FLEET_MQTT_CA_FILE")
-    if ca_file is not None:
-        if not ca_file:
-            parser.error("ESP32_FLEET_MQTT_CA_FILE deve indicar um arquivo de CA.")
-        try:
-            tls_context = ssl.create_default_context(cafile=ca_file)
-        except OSError:
-            parser.error("ESP32_FLEET_MQTT_CA_FILE deve indicar um arquivo de CA válido e legível.")
-
-    broker = args.broker.strip()
-    if not broker:
-        parser.error("--broker deve informar o host do broker.")
-    if not 1 <= args.port <= 65535:
-        parser.error("--port deve estar entre 1 e 65535.")
+    mqtt = parse_mqtt_options(parser, args)
     if not isfinite(args.interval) or args.interval <= 0:
         parser.error("--interval deve ser positivo e finito.")
     if args.samples is not None and args.samples < 1:
@@ -121,8 +142,8 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
     if device_id is None:
         device_id = "esp32-001" if args.devices == 1 else "esp32"
     settings = SimulatorSettings(
-        broker,
-        args.port,
+        mqtt.broker,
+        mqtt.port,
         device_id,
         args.interval,
         args.seed,
@@ -133,9 +154,9 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
         delay_seconds=args.delay_seconds if args.delay_seconds is not None else 0.0,
         omit_every=args.omit_every,
         metrics=args.metrics,
-        username=username,
-        password=password,
-        tls_context=tls_context,
+        username=mqtt.username,
+        password=mqtt.password,
+        tls_context=mqtt.tls_context,
         command_queue_size=args.command_queue_size,
     )
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", device_id):
