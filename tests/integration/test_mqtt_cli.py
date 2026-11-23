@@ -3,6 +3,7 @@
 import asyncio
 import json
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -191,5 +192,69 @@ def test_cli_runs_a_fleet_with_independent_sessions_and_samples(
     """Confirma o cenário na frota, o encerramento e o isolamento da sessão."""
     asyncio.run(
         _verify_fleet(mosquitto_executable, unused_tcp_port, mosquitto_config),
+        loop_factory=asyncio.SelectorEventLoop,
+    )
+
+
+async def _verify_reading_faults(executable: str, port: int, config: Path) -> None:
+    with _broker(executable, config) as broker:
+        await _wait_for_broker(broker, port, config)
+        async with aiomqtt.Client("127.0.0.1", port, timeout=2.0) as subscriber:
+            await subscriber.subscribe(f"{_TOPIC}/+", qos=1)
+            args = [
+                sys.executable,
+                "-m",
+                "esp32_fleet",
+                "--port",
+                str(port),
+                "--samples",
+                "6",
+                "--interval",
+                "0.05",
+                "--seed",
+                "42",
+                "--omit-every",
+                "2",
+                "--delay-every",
+                "3",
+                "--delay-seconds",
+                "0.25",
+            ]
+            sequences: list[int] = []
+            temperatures: list[float] = []
+            boot_ids: set[str] = set()
+            with _running_process(args, config.with_name("reading-faults.log")) as cli:
+                async with asyncio.timeout(10):
+                    while True:
+                        topic, payload = await _message(subscriber)
+                        if topic == f"{_TOPIC}/data":
+                            received_at = datetime.now(UTC)
+                            sequence = payload["sequence_number"]
+                            sequences.append(sequence)
+                            temperatures.append(payload["temperature_c"])
+                            boot_ids.add(payload["boot_id"])
+                            if sequence == 2:
+                                elapsed = received_at - datetime.fromisoformat(
+                                    payload["sampled_at"]
+                                )
+                                # Reserva margem para a resolução do relógio do sistema.
+                                assert elapsed.total_seconds() >= 0.23
+                        elif topic == f"{_TOPIC}/status" and payload["state"] == "offline":
+                            assert payload["reason"] == "graceful_shutdown"
+                            assert boot_ids == {payload["boot_id"]}
+                            break
+                assert cli.wait(timeout=5) == 0
+
+    assert sequences == [0, 2, 4]
+    reference = VitalsGenerator(seed=42)
+    assert temperatures == [reference.generate().temperature_c for _ in range(6)][::2]
+
+
+def test_cli_omits_and_delays_readings(
+    mosquitto_executable: str, unused_tcp_port: int, mosquitto_config: Path
+) -> None:
+    """Verifica lacunas, atraso desde a coleta e avanço da série com omissões."""
+    asyncio.run(
+        _verify_reading_faults(mosquitto_executable, unused_tcp_port, mosquitto_config),
         loop_factory=asyncio.SelectorEventLoop,
     )

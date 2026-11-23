@@ -53,6 +53,9 @@ def test_cli_defaults_and_custom_settings() -> None:
         ("--devices", "0"),
         ("--device-id", "esp32/+"),
         ("--scenario", "unknown"),
+        ("--delay-every", "2"),
+        ("--delay-seconds", "0.5"),
+        ("--omit-every", "0"),
     ],
 )
 def test_cli_rejects_invalid_settings(
@@ -63,6 +66,16 @@ def test_cli_rejects_invalid_settings(
         parse_settings([option, value])
     assert exc.value.code == 2
     assert option in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("every", "seconds"), [("0", "0.5"), ("2", "0"), ("2", "nan"), ("2", "inf")]
+)
+def test_cli_rejects_invalid_delay(every: str, seconds: str) -> None:
+    """Recusa periodicidade inválida ou atraso que não possa ser aplicado."""
+    with pytest.raises(SystemExit) as exc:
+        parse_settings(["--delay-every", every, "--delay-seconds", seconds])
+    assert exc.value.code == 2
 
 
 def test_cli_maps_keyboard_interrupt_to_exit_130() -> None:
@@ -146,7 +159,7 @@ async def test_cancelling_fleet_waits_for_every_member_to_close() -> None:
 
 @pytest.mark.asyncio
 async def test_publish_sample_replays_original_bytes_and_uses_new_boot_next() -> None:
-    """Uma leitura em trânsito mantém o boot de origem e a próxima usa o novo boot."""
+    """A leitura atrasada mantém o boot de origem e a próxima usa o novo boot."""
 
     async def messages() -> AsyncIterator[aiomqtt.Message]:
         queue: asyncio.Queue[aiomqtt.Message] = asyncio.Queue()
@@ -161,19 +174,35 @@ async def test_publish_sample_replays_original_bytes_and_uses_new_boot_next() ->
     first.publish.side_effect = [None, aiomqtt.MqttError("publicação sem confirmação")]
     policy = ConnectionPolicy(max_retries=1, initial_delay=0.001, max_delay=0.001)
     sampled_boots: list[UUID] = []
+    simulated_delay = 0.25
+    original_sleep = asyncio.sleep
+    delayed_samples = 0
 
     def sample(boot_id: UUID) -> bytes:
         sampled_boots.append(boot_id)
         return str(boot_id).encode("ascii")
 
+    async def sleep(seconds: float) -> None:
+        nonlocal delayed_samples
+        if seconds == simulated_delay:
+            assert len(sampled_boots) == 1
+            assert first.publish.await_count == 1  # Apenas o anúncio de presença saiu.
+            delayed_samples += 1
+        else:
+            await original_sleep(seconds)
+
     topic = "vitals/esp32-001/data"
-    with patch("esp32_fleet.mqtt.connection.aiomqtt.Client", side_effect=[first, second]):
+    with (
+        patch("esp32_fleet.mqtt.connection.aiomqtt.Client", side_effect=[first, second]),
+        patch("esp32_fleet.mqtt.connection.asyncio.sleep", side_effect=sleep),
+    ):
         async with MqttConnection(
             "esp32-001", policy=policy, on_command=lambda message: None
         ) as connection:
-            await connection.publish_sample(sample)
+            await connection.publish_sample(sample, delay_seconds=simulated_delay)
             await connection.publish_sample(sample)
 
+    assert delayed_samples == 1
     original, recovered = sampled_boots
     assert original != recovered
     assert first.publish.await_args_list[1].args == (topic, str(original).encode("ascii"))

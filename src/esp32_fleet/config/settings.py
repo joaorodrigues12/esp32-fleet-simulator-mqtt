@@ -11,7 +11,7 @@ from esp32_fleet.domain.vitals import VitalsScenario
 
 @dataclass(frozen=True, slots=True)
 class SimulatorSettings:
-    """Opções de conexão, cadência, tamanho da frota e perfil dos sinais."""
+    """Opções de conexão, cadência, frota, perfil dos sinais e falhas simuladas."""
 
     broker: str
     port: int
@@ -21,6 +21,9 @@ class SimulatorSettings:
     samples: int | None
     devices: int = 1
     scenario: VitalsScenario = VitalsScenario.BASELINE
+    delay_every: int | None = None
+    delay_seconds: float = 0.0
+    omit_every: int | None = None
 
     @property
     def device_number_width(self) -> int:
@@ -40,7 +43,9 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
     parser.add_argument("--devices", type=int, default=1, help="Quantidade de dispositivos.")
     parser.add_argument("--interval", type=float, default=2.0, help="Intervalo em segundos.")
     parser.add_argument("--seed", type=int, help="Semente do gerador para reproduzir a série.")
-    parser.add_argument("--samples", type=int, help="Quantidade de amostras por dispositivo.")
+    parser.add_argument(
+        "--samples", type=int, help="Total de ciclos por dispositivo, incluindo as omissões."
+    )
     parser.add_argument(
         "--scenario",
         type=VitalsScenario,
@@ -48,6 +53,11 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
         default=VitalsScenario.BASELINE,
         help="Perfil dos sinais sintéticos. Padrão: baseline.",
     )
+    parser.add_argument("--delay-every", type=int, metavar="N", help="Atrasa cada Nª leitura.")
+    parser.add_argument(
+        "--delay-seconds", type=float, metavar="S", help="Tempo de atraso em segundos."
+    )
+    parser.add_argument("--omit-every", type=int, metavar="N", help="Omite cada Nª leitura.")
     args = parser.parse_args(argv)
 
     broker = args.broker.strip()
@@ -61,6 +71,16 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
         parser.error("--samples deve ser positivo.")
     if args.devices < 1:
         parser.error("--devices deve ser positivo.")
+    if (args.delay_every is None) != (args.delay_seconds is None):
+        parser.error("Informe --delay-every e --delay-seconds em conjunto.")
+    if args.delay_every is not None and args.delay_every < 1:
+        parser.error("--delay-every deve ser positivo.")
+    if args.delay_seconds is not None and (
+        not isfinite(args.delay_seconds) or args.delay_seconds <= 0
+    ):
+        parser.error("--delay-seconds deve ser positivo e finito.")
+    if args.omit_every is not None and args.omit_every < 1:
+        parser.error("--omit-every deve ser positivo.")
 
     device_id = args.device_id
     if device_id is None:
@@ -74,6 +94,9 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
         args.samples,
         args.devices,
         scenario=args.scenario,
+        delay_every=args.delay_every,
+        delay_seconds=args.delay_seconds if args.delay_seconds is not None else 0.0,
+        omit_every=args.omit_every,
     )
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", device_id):
         parser.error("--device-id deve seguir o formato de identificador MQTT do projeto.")
