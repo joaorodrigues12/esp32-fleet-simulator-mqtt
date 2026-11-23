@@ -34,6 +34,8 @@ class MqttConnection:
         *,
         hostname: str = "127.0.0.1",
         port: int = 1883,
+        username: str | None = None,
+        password: str | None = None,
         policy: ConnectionPolicy | None = None,
         timeout: float = 3.0,
         on_command: Callable[[aiomqtt.Message], None] | None = None,
@@ -47,6 +49,8 @@ class MqttConnection:
             device_id: Identificador operacional usado no tópico e no cliente MQTT.
             hostname: Host do broker.
             port: Porta TCP do broker.
+            username: Usuário MQTT usado em cada conexão.
+            password: Senha MQTT usada em cada conexão.
             policy: Política de reconexão usada em cada publicação.
             timeout: Tempo em segundos para aguardar confirmações do protocolo.
             on_command: Callback síncrono para encaminhar comandos. Fornecê-lo
@@ -73,6 +77,8 @@ class MqttConnection:
         self._topic = f"vitals/{device_id}/data"
         self._hostname = hostname
         self._port = port
+        self._username = username
+        self._password = password
         self._policy = policy if policy is not None else ConnectionPolicy()
         self._timeout = timeout
         self._on_command = on_command
@@ -214,6 +220,8 @@ class MqttConnection:
                 self._hostname,
                 self._port,
                 identifier=f"esp32-fleet-{self._device_id}",
+                username=self._username,
+                password=self._password,
                 protocol=aiomqtt.ProtocolVersion.V311,
                 clean_session=True,
                 timeout=self._timeout,

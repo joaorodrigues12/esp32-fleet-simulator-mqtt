@@ -1,9 +1,10 @@
 """Configura a execução de dispositivos virtuais no terminal."""
 
 import argparse
+import os
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import isfinite
 
 from esp32_fleet.domain.vitals import VitalsScenario
@@ -25,6 +26,8 @@ class SimulatorSettings:
     delay_seconds: float = 0.0
     omit_every: int | None = None
     metrics: bool = False
+    username: str | None = None
+    password: str | None = field(default=None, repr=False)
 
     @property
     def device_number_width(self) -> int:
@@ -64,6 +67,11 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
     )
     args = parser.parse_args(argv)
 
+    username = os.environ.get("ESP32_FLEET_MQTT_USERNAME") or None
+    password = os.environ.get("ESP32_FLEET_MQTT_PASSWORD") or None
+    if (username is None) != (password is None):
+        parser.error("Defina ESP32_FLEET_MQTT_USERNAME e ESP32_FLEET_MQTT_PASSWORD em conjunto.")
+
     broker = args.broker.strip()
     if not broker:
         parser.error("--broker deve informar o host do broker.")
@@ -102,6 +110,8 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
         delay_seconds=args.delay_seconds if args.delay_seconds is not None else 0.0,
         omit_every=args.omit_every,
         metrics=args.metrics,
+        username=username,
+        password=password,
     )
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", device_id):
         parser.error("--device-id deve seguir o formato de identificador MQTT do projeto.")

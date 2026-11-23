@@ -5,6 +5,10 @@ O formato segue Keep a Changelog e Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Perfil autenticado do Mosquitto local e suporte a usuário e senha por variáveis de ambiente na CLI.
+
 ## [0.1.0]
 
 ### Added
