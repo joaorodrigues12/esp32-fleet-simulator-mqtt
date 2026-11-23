@@ -1,0 +1,8 @@
+services:
+  mosquitto:
+    volumes:
+      - ./docker/mosquitto/mosquitto-auth.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-auth:/mosquitto/data
+
+volumes:
+  mosquitto-auth:

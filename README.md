@@ -29,6 +29,40 @@ Em outro terminal, execute o comando da próxima seção. Se você já tem um Mo
 local, pode assinar o mesmo tópico com seu cliente MQTT e indicar o endereço do broker
 com `--broker` e `--port`.
 
+### Usar o perfil autenticado do broker
+
+Na raiz do projeto, crie a conta `esp32` para o Mosquitto de desenvolvimento.
+O utilitário solicitará a senha e o Compose manterá o arquivo de senhas em um
+volume local. Use `-c` na primeira criação do arquivo. Nas alterações futuras,
+execute o mesmo comando sem `-c` para preservar os usuários existentes.
+
+```console
+docker compose -f compose.yaml -f compose.auth.yaml run --rm mosquitto mosquitto_passwd -c /mosquitto/data/passwords esp32
+docker compose -f compose.yaml -f compose.auth.yaml up -d mosquitto
+```
+
+Configure usuário e senha no terminal em que a CLI será executada. Em PowerShell:
+
+```powershell
+$env:ESP32_FLEET_MQTT_USERNAME = 'esp32'
+$env:ESP32_FLEET_MQTT_PASSWORD = Read-Host 'Senha MQTT' -MaskInput
+uv run --locked python -m esp32_fleet --samples 1 --metrics
+```
+
+Em Bash:
+
+```bash
+export ESP32_FLEET_MQTT_USERNAME=esp32
+read -rsp 'Senha MQTT: ' ESP32_FLEET_MQTT_PASSWORD
+export ESP32_FLEET_MQTT_PASSWORD
+uv run --locked python -m esp32_fleet --samples 1 --metrics
+```
+
+Use a mesma senha criada no broker. O perfil publica a porta em `127.0.0.1`
+e exige credenciais de cada cliente. Para confirmar a publicação, confira
+`samples_acked: 1` no resumo da CLI. Depois de alterar a senha no volume,
+reinicie o serviço para carregar o arquivo atualizado.
+
 ## Estrutura
 
 - `src/esp32_fleet/config` e `orchestration` configuram a CLI e executam a frota.

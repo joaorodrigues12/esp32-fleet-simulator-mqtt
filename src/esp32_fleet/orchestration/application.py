@@ -53,6 +53,8 @@ async def run_device(settings: SimulatorSettings) -> None:
             settings.device_id,
             hostname=settings.broker,
             port=settings.port,
+            username=settings.username,
+            password=settings.password,
             on_session_command=handler.handle,
             metrics=metrics,
         ) as connection:

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -35,7 +36,9 @@ def mosquitto_executable() -> str:
 
 
 @contextmanager
-def _running_process(args: list[str], log_path: Path) -> Iterator[subprocess.Popen[bytes]]:
+def _running_process(
+    args: list[str], log_path: Path, *, env: dict[str, str] | None = None
+) -> Iterator[subprocess.Popen[bytes]]:
     # O teste termina apenas o processo isolado que iniciou.
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     with (
@@ -45,6 +48,7 @@ def _running_process(args: list[str], log_path: Path) -> Iterator[subprocess.Pop
             stdout=log,
             stderr=subprocess.STDOUT,
             creationflags=flags,
+            env=env,
         ) as process,
     ):
         try:
@@ -261,5 +265,66 @@ def test_mosquitto_publishes_retained_last_will_after_process_is_killed(
     """Confirma que o broker mantém o LWT após a interrupção do publicador."""
     asyncio.run(
         _verify_last_will(mosquitto_executable, unused_tcp_port, mosquitto_config),
+        loop_factory=asyncio.SelectorEventLoop,
+    )
+
+
+async def _verify_authenticated_cli(executable: str, config: Path, port: int) -> None:
+    tool_name = "mosquitto_passwd.exe" if sys.platform == "win32" else "mosquitto_passwd"
+    sibling = Path(executable).with_name(tool_name)
+    password_tool = str(sibling) if sibling.is_file() else shutil.which(tool_name)
+    assert password_tool is not None, "Instale mosquitto_passwd junto com o broker de integração."
+
+    username = "test-device"
+    password = secrets.token_hex(16)
+    password_file = config.with_name("passwords")
+    # O modo batch recebe apenas uma senha descartável gerada para este teste.
+    generated = subprocess.run(
+        [password_tool, "-H", "sha512-pbkdf2", "-b", "-c", str(password_file), username, password],
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+    assert generated.returncode == 0, generated.stderr
+    profile = Path(__file__).resolve().parents[2] / "docker/mosquitto/mosquitto-auth.conf"
+    config.write_text(
+        profile.read_text(encoding="utf-8")
+        .replace("listener 1883", f"listener {port} 127.0.0.1")
+        .replace("/mosquitto/data/passwords", password_file.as_posix()),
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment.pop("ESP32_FLEET_MQTT_USERNAME", None)
+    environment.pop("ESP32_FLEET_MQTT_PASSWORD", None)
+    args = [sys.executable, "-m", "esp32_fleet", "--port", str(port), "--samples", "1", "--metrics"]
+
+    with _broker(executable, config) as broker:
+        await _wait_for_broker(broker, port, config)
+        for label, candidate, expected_code in (
+            ("valid", password, 0),
+            ("anonymous", None, 1),
+            ("wrong", secrets.token_hex(16), 1),
+        ):
+            client_env = environment.copy()
+            if candidate is not None:
+                client_env["ESP32_FLEET_MQTT_USERNAME"] = username
+                client_env["ESP32_FLEET_MQTT_PASSWORD"] = candidate
+            log = config.with_name(f"auth-{label}.log")
+            with _running_process(args, log, env=client_env) as cli:
+                code = await asyncio.to_thread(cli.wait, timeout=15)
+            output = log.read_text(encoding="utf-8", errors="replace")
+            assert code == expected_code, output
+            assert candidate is None or candidate not in output
+            summaries = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+            assert len(summaries) == 1, output
+            assert summaries[0]["samples_acked"] == (1 if expected_code == 0 else 0)
+
+
+def test_authenticated_broker_accepts_only_configured_credentials(
+    mosquitto_executable: str, unused_tcp_port: int, mosquitto_config: Path
+) -> None:
+    """Exercita a CLI contra o perfil autenticado com três combinações de credenciais."""
+    asyncio.run(
+        _verify_authenticated_cli(mosquitto_executable, mosquitto_config, unused_tcp_port),
         loop_factory=asyncio.SelectorEventLoop,
     )

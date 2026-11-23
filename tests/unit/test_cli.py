@@ -17,6 +17,37 @@ from esp32_fleet.mqtt.reconnect import ConnectionPolicy
 from esp32_fleet.orchestration.fleet import run_fleet
 
 
+@pytest.fixture(autouse=True)
+def isolate_mqtt_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mantém os testes independentes das credenciais do terminal."""
+    monkeypatch.delenv("ESP32_FLEET_MQTT_USERNAME", raising=False)
+    monkeypatch.delenv("ESP32_FLEET_MQTT_PASSWORD", raising=False)
+
+
+def test_cli_reads_credentials_without_showing_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lê as duas variáveis e mantém a senha fora da representação das opções."""
+    monkeypatch.setenv("ESP32_FLEET_MQTT_USERNAME", "test-device")
+    monkeypatch.setenv("ESP32_FLEET_MQTT_PASSWORD", "synthetic-secret")
+    settings = parse_settings([])
+    assert settings.username == "test-device"
+    assert settings.password == "synthetic-secret"
+    assert "synthetic-secret" not in repr(settings)
+
+
+@pytest.mark.parametrize("field", ["USERNAME", "PASSWORD"])
+def test_cli_rejects_partial_credentials(
+    field: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Exige usuário e senha juntos antes de abrir qualquer conexão."""
+    monkeypatch.setenv(f"ESP32_FLEET_MQTT_{field}", "synthetic-credential")
+    with pytest.raises(SystemExit) as exc:
+        parse_settings([])
+    assert exc.value.code == 2
+    error = capsys.readouterr().err
+    assert "ESP32_FLEET_MQTT_USERNAME e ESP32_FLEET_MQTT_PASSWORD" in error
+    assert "synthetic-credential" not in error
+
+
 def test_cli_defaults_and_custom_settings() -> None:
     """Interpreta as opções de conexão e execução."""
     assert parse_settings([]) == SimulatorSettings("127.0.0.1", 1883, "esp32-001", 2.0, None, None)
@@ -227,16 +258,24 @@ async def test_publish_sample_replays_original_bytes_and_uses_new_boot_next() ->
 
     topic = "vitals/esp32-001/data"
     with (
-        patch("esp32_fleet.mqtt.connection.aiomqtt.Client", side_effect=[first, second]),
+        patch("esp32_fleet.mqtt.connection.aiomqtt.Client", side_effect=[first, second]) as factory,
         patch("esp32_fleet.mqtt.connection.asyncio.sleep", side_effect=sleep),
     ):
         async with MqttConnection(
-            "esp32-001", policy=policy, on_command=lambda message: None
+            "esp32-001",
+            policy=policy,
+            on_command=lambda message: None,
+            username="test-device",
+            password="synthetic-secret",
         ) as connection:
             await connection.publish_sample(sample, delay_seconds=simulated_delay)
             await connection.publish_sample(sample)
 
     assert delayed_samples == 1
+    assert len(factory.call_args_list) == 2
+    for call in factory.call_args_list:
+        assert call.kwargs["username"] == "test-device"
+        assert call.kwargs["password"] == "synthetic-secret"
     original, recovered = sampled_boots
     assert original != recovered
     assert first.publish.await_args_list[1].args == (topic, str(original).encode("ascii"))
