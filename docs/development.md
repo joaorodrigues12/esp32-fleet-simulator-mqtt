@@ -98,12 +98,62 @@ no mesmo computador.
 
 ### Teste automatizado
 
-O teste automático usa três dispositivos com quatro leituras cada. Para executá-lo
-junto com a verificação do limite de 50 dispositivos, use o comando abaixo.
+Os testes automáticos verificam entrega e recursos com três dispositivos e quatro
+leituras por dispositivo. Também verificam a retomada após reiniciar o Mosquitto e
+o limite de 50 dispositivos.
 
 ```console
 uv run --locked pytest -q tests/integration/test_fleet_benchmark.py
 ```
+
+## Ensaio de recursos e tempo de recuperação
+
+O benchmark de carga também usa `psutil` para amostrar, a cada 250 ms, a CPU e a
+memória residente da árvore de processos da CLI. Isso inclui o interpretador
+iniciado pelo executável da venv no Windows. O broker roda em processo próprio
+e o assinante roda no processo do benchmark.
+`fleet_cpu_seconds_sampled` soma os últimos tempos de CPU de usuário e sistema
+observados por processo. `fleet_cpu_average_percent` divide esse total pela
+duração da CLI. Um valor de 100% equivale a um processador lógico ocupado.
+`fleet_peak_rss_mib` é o maior total de memória residente observado em uma coleta,
+em MiB. Tanto o tempo de CPU quanto o pico de memória são estimativas por amostragem.
+
+Para medir a retomada, rode o benchmark em modo de recuperação.
+
+```console
+uv run --locked python scripts/benchmark_fleet.py --restart-broker --devices 50 --samples 12 --interval 2
+```
+
+Depois de observar uma leitura de cada dispositivo, o script interrompe o
+Mosquitto isolado, espera meio segundo e o reinicia na mesma porta. A medição
+começa quando a verificação TCP confirma que a porta voltou a aceitar conexões.
+Para cada dispositivo, o cronômetro termina na primeira leitura observada
+pelo novo assinante com um novo `boot_id`. Essa medição depende do backoff
+de reconexão, da cadência de coleta e do momento em que o assinante se conecta.
+O JSON inclui os tempos por dispositivo,
+p50, p95, máximo e o total recuperado. O script retorna código 1 se algum
+dispositivo ficar sem leitura de retomada na janela de 12 segundos ou se a CLI falhar.
+
+### Resultados com 50 dispositivos
+
+Os dois ensaios foram executados em loopback em 22/11/2026 no Windows 11 (build
+26200), com Python 3.12.8, Mosquitto 2.1.4 e psutil 7.2.2. A carga estável
+usou 150 leituras por dispositivo e o ensaio de recuperação usou 12.
+O intervalo foi de 2 segundos nos dois casos.
+
+| Ensaio | Métrica | Valor |
+| --- | --- | ---: |
+| Carga estável | Leituras únicas recebidas | 7.500 de 7.500 |
+| Carga estável | Duração | 300,547 s |
+| Carga estável | Vazão | 24,955 mensagens/s |
+| Carga estável | Coletas de recursos | 1.137 |
+| Carga estável | Tempo de CPU amostrado | 2,219 s |
+| Carga estável | CPU média de um processador lógico | 0,738% |
+| Carga estável | Pico observado de memória residente | 51,914 MiB |
+| Recuperação | Dispositivos com nova leitura | 50 de 50 |
+| Recuperação | p50 | 1.047,914 ms |
+| Recuperação | p95 | 1.048,879 ms |
+| Recuperação | Máximo | 1.048,963 ms |
 
 ## Checklist por funcionalidade
 
