@@ -55,6 +55,7 @@ async def run_device(settings: SimulatorSettings) -> None:
             port=settings.port,
             username=settings.username,
             password=settings.password,
+            tls_context=settings.tls_context,
             on_session_command=handler.handle,
             metrics=metrics,
         ) as connection:

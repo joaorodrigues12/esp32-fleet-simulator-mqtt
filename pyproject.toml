@@ -24,6 +24,7 @@ dev = [
   "mypy>=1.14,<2",
   "pre-commit>=4,<5",
   "psutil>=7.2,<8",
+  "trustme>=1.2,<2",
 ]
 
 [tool.hatch.build.targets.wheel]
