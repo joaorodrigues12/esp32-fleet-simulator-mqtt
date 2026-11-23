@@ -1,6 +1,7 @@
 """Verifica argumentos, encerramento e identidade das amostras da CLI."""
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
@@ -86,6 +87,39 @@ def test_cli_maps_keyboard_interrupt_to_exit_130() -> None:
 
     with patch("esp32_fleet.__main__.run_fleet", side_effect=interrupted):
         assert main([]) == 130
+
+
+@pytest.mark.parametrize("metrics_enabled", [False, True])
+def test_cli_emits_partial_metrics_only_when_enabled(
+    metrics_enabled: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Mantém o código de saída e inclui o resumo mesmo se a conexão inicial falhar."""
+    unavailable = AsyncMock(spec=aiomqtt.Client)
+    unavailable.__aenter__.side_effect = aiomqtt.MqttError("broker indisponível")
+    policy = ConnectionPolicy(max_retries=0)
+
+    with (
+        patch("esp32_fleet.mqtt.connection.aiomqtt.Client", return_value=unavailable),
+        patch("esp32_fleet.mqtt.connection.ConnectionPolicy", return_value=policy),
+    ):
+        assert main(["--metrics"] if metrics_enabled else []) == 1
+
+    result = capsys.readouterr()
+    assert result.out == ""
+    lines = result.err.splitlines()
+    assert lines[-1] == "Falha MQTT: broker indisponível"
+    if metrics_enabled:
+        assert len(lines) == 2
+        assert json.loads(lines[0]) == {
+            "event": "telemetry_metrics",
+            "device_id": "esp32-001",
+            "samples_acked": 0,
+            "samples_omitted": 0,
+            "mqtt_errors": 1,
+            "reconnections": 0,
+        }
+    else:
+        assert len(lines) == 1
 
 
 def test_cli_rejects_a_prefix_that_makes_device_ids_too_long() -> None:

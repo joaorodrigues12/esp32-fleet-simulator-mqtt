@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sys
 from dataclasses import asdict
 from datetime import UTC, datetime
 from itertools import count
@@ -11,12 +12,14 @@ from esp32_fleet.config.settings import SimulatorSettings
 from esp32_fleet.domain.vitals import VitalsGenerator
 from esp32_fleet.handlers.commands import CommandHandler
 from esp32_fleet.mqtt.connection import MqttConnection
+from esp32_fleet.observability.metrics import TelemetryMetrics
 
 
 async def run_device(settings: SimulatorSettings) -> None:
     """Executa os ciclos de amostragem até atingir o limite ou receber cancelamento."""
     handler = CommandHandler(settings.device_id)
     generator = VitalsGenerator(seed=settings.seed, scenario=settings.scenario)
+    metrics = TelemetryMetrics(settings.device_id) if settings.metrics else None
     last_boot: UUID | None = None
     sequence = count()
 
@@ -45,22 +48,29 @@ async def run_device(settings: SimulatorSettings) -> None:
         }
         return json.dumps(payload).encode("utf-8")
 
-    async with MqttConnection(
-        settings.device_id,
-        hostname=settings.broker,
-        port=settings.port,
-        on_session_command=handler.handle,
-    ) as connection:
-        for cycle in count(1):
-            if settings.omit_every is not None and cycle % settings.omit_every == 0:
-                # A série avança mesmo se o consumidor não receber a leitura do ciclo.
-                next_sequence(connection.boot_id)
-                generator.generate()
-            else:
-                delay = 0.0
-                if settings.delay_every is not None and cycle % settings.delay_every == 0:
-                    delay = settings.delay_seconds
-                await connection.publish_sample(sample, delay_seconds=delay)
-            if cycle == settings.samples:
-                break
-            await asyncio.sleep(settings.interval)
+    try:
+        async with MqttConnection(
+            settings.device_id,
+            hostname=settings.broker,
+            port=settings.port,
+            on_session_command=handler.handle,
+            metrics=metrics,
+        ) as connection:
+            for cycle in count(1):
+                if settings.omit_every is not None and cycle % settings.omit_every == 0:
+                    # A série e a sequência avançam mesmo quando a leitura é omitida.
+                    next_sequence(connection.boot_id)
+                    generator.generate()
+                    if metrics is not None:
+                        metrics.samples_omitted += 1
+                else:
+                    delay = 0.0
+                    if settings.delay_every is not None and cycle % settings.delay_every == 0:
+                        delay = settings.delay_seconds
+                    await connection.publish_sample(sample, delay_seconds=delay)
+                if cycle == settings.samples:
+                    break
+                await asyncio.sleep(settings.interval)
+    finally:
+        if metrics is not None:
+            print(metrics.to_json(), file=sys.stderr)

@@ -1,6 +1,7 @@
 """Verifica a retomada de uma frota MQTT após a interrupção do broker local."""
 
 import asyncio
+import json
 import sys
 from contextlib import ExitStack
 from pathlib import Path
@@ -56,6 +57,9 @@ async def _verify_fleet_recovery(executable: str, port: int, config: Path) -> No
         "12",
         "--seed",
         "42",
+        "--omit-every",
+        "4",
+        "--metrics",
     ]
     log = config.with_name("fleet-recovery.log")
     with ExitStack() as fleet_scope:
@@ -81,13 +85,22 @@ async def _verify_fleet_recovery(executable: str, port: int, config: Path) -> No
                 await _observe_fleet(observer, original_boots)
 
             exit_code = await asyncio.to_thread(fleet.wait, timeout=8)
-            assert exit_code == 0, log.read_text(encoding="utf-8", errors="replace")
+            output = log.read_text(encoding="utf-8", errors="replace")
+            assert exit_code == 0, output
+            summaries = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+            assert len(summaries) == len(_DEVICE_IDS), output
+            assert {summary["device_id"] for summary in summaries} == _DEVICE_IDS
+            for summary in summaries:
+                assert summary["event"] == "telemetry_metrics"
+                assert summary["samples_acked"] == 9 and summary["samples_omitted"] == 3
+                assert summary["reconnections"] == 1
+                assert summary["mqtt_errors"] >= 1
 
 
 def test_fleet_resumes_publishing_after_mosquitto_restart(
     mosquitto_executable: str, unused_tcp_port: int, mosquitto_config: Path
 ) -> None:
-    """Confirma que a mesma frota anuncia novos boots e volta a publicar."""
+    """Confirma a retomada dos três dispositivos e seus contadores individuais."""
     asyncio.run(
         _verify_fleet_recovery(mosquitto_executable, unused_tcp_port, mosquitto_config),
         loop_factory=asyncio.SelectorEventLoop,

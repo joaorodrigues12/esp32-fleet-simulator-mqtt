@@ -19,6 +19,7 @@ from esp32_fleet.mqtt.reconnect import ConnectionPolicy
 
 if TYPE_CHECKING:
     from esp32_fleet.handlers.commands import CommandReplies
+    from esp32_fleet.observability.metrics import TelemetryMetrics
 
 _DEVICE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _LOGGER = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ class MqttConnection:
         on_command: Callable[[aiomqtt.Message], None] | None = None,
         on_session_command: Callable[[bytes, UUID], CommandReplies | None] | None = None,
         heartbeat_interval_seconds: int = 10,
+        metrics: TelemetryMetrics | None = None,
     ) -> None:
         """Configura a publicação de telemetria para um dispositivo.
 
@@ -52,6 +54,7 @@ class MqttConnection:
             on_session_command: Callback que processa um comando e prepara o ACK
                 e o evento de sessão. Também habilita presença.
             heartbeat_interval_seconds: Intervalo entre anúncios de presença.
+            metrics: Contadores opcionais compartilhados com o ciclo do dispositivo.
 
         Raises:
             ValueError: Se a configuração for inválida ou ambos os callbacks forem fornecidos.
@@ -76,6 +79,7 @@ class MqttConnection:
         self._on_session_command = on_session_command
         self._presence_enabled = on_command is not None or on_session_command is not None
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._metrics = metrics
         self._lock = asyncio.Lock()
         self._client_scope = AsyncExitStack()
         self._client: aiomqtt.Client | None = None
@@ -112,6 +116,7 @@ class MqttConnection:
                 if self._presence is not None and self._client is not None:
                     await self._presence.publish(self._client, "graceful_shutdown")
             except aiomqtt.MqttError:
+                self._record_mqtt_error()
                 # Preserva uma exceção do chamador e registra a falha do anúncio final.
                 if exc is None:
                     raise
@@ -182,8 +187,11 @@ class MqttConnection:
                         await asyncio.sleep(sample_delay)
                 if payload is not None:
                     await client.publish(self._topic, payload, qos=1, retain=False)
+                    if self._metrics is not None:
+                        self._metrics.samples_acked += 1
                 return
             except aiomqtt.MqttError:
+                self._record_mqtt_error()
                 await self._disconnect()
                 delay = next(delays, None)
                 if delay is None:
@@ -225,7 +233,13 @@ class MqttConnection:
                 asyncio.create_task(self._send_heartbeats(client, presence)),
             )
         self._client = client
+        if self._metrics is not None:
+            self._metrics.record_connection()
         return client
+
+    def _record_mqtt_error(self) -> None:
+        if self._metrics is not None:
+            self._metrics.mqtt_errors += 1
 
     async def _forward_commands(self, client: aiomqtt.Client, boot_id: UUID) -> None:
         try:
@@ -253,11 +267,13 @@ class MqttConnection:
                                 f"vitals/{self._device_id}/{channel}", payload, qos=1, retain=False
                             )
                         except aiomqtt.MqttError:
+                            self._record_mqtt_error()
                             # O controlador pode repetir o comando após perder a confirmação.
                             _LOGGER.warning(
                                 "Falha ao confirmar %s de %s.", channel, self._device_id
                             )
         except aiomqtt.MqttError:
+            self._record_mqtt_error()
             _LOGGER.warning("O canal de comandos de %s foi interrompido.", self._device_id)
 
     async def _send_heartbeats(self, client: aiomqtt.Client, presence: DevicePresence) -> None:
@@ -266,6 +282,7 @@ class MqttConnection:
                 await asyncio.sleep(presence.heartbeat_interval_seconds)
                 await presence.publish(client, "connected")
         except aiomqtt.MqttError:
+            self._record_mqtt_error()
             _LOGGER.warning("Falha ao confirmar o heartbeat de %s.", self._device_id)
 
     async def _stop_presence_tasks(self) -> None:
