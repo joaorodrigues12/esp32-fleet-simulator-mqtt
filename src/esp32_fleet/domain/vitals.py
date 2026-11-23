@@ -1,12 +1,21 @@
 """Gera séries sintéticas de sinais vitais para o simulador."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from random import Random
 
 _HEART_RATE_REFERENCE = 82.0
 _RESPIRATORY_RATE_REFERENCE = 17.0
 _TEMPERATURE_REFERENCE = 36.7
+_ELEVATED_TEMPERATURE_REFERENCE = 38.7
 _RETURN_TO_REFERENCE = 0.15
+
+
+class VitalsScenario(StrEnum):
+    """Perfis de geração disponíveis na CLI e no domínio."""
+
+    BASELINE = "baseline"
+    TEMPERATURE_RISE = "temperature-rise"
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,16 +30,24 @@ class VitalSigns:
 class VitalsGenerator:
     """Mantém uma série de sinais que pode ser reproduzida com uma semente."""
 
-    def __init__(self, seed: int | None = None) -> None:
+    def __init__(
+        self, seed: int | None = None, *, scenario: VitalsScenario = VitalsScenario.BASELINE
+    ) -> None:
         """Inicializa o estado e a fonte de aleatoriedade da série.
 
         Args:
             seed: Semente da instância. Use o mesmo inteiro para reproduzir a série.
+            scenario: Perfil aplicado à série. A elevação muda só a referência da temperatura.
         """
         self._random = Random(seed)
         self._heart_rate = _HEART_RATE_REFERENCE
         self._respiratory_rate = _RESPIRATORY_RATE_REFERENCE
         self._temperature = _TEMPERATURE_REFERENCE
+        self._temperature_reference = (
+            _ELEVATED_TEMPERATURE_REFERENCE
+            if scenario == VitalsScenario.TEMPERATURE_RISE
+            else _TEMPERATURE_REFERENCE
+        )
 
     def generate(self) -> VitalSigns:
         """Avança a série em um passo e produz a próxima amostra.
@@ -56,7 +73,7 @@ class VitalsGenerator:
         )
         self._temperature = _advance(
             self._temperature,
-            reference=_TEMPERATURE_REFERENCE,
+            reference=self._temperature_reference,
             variation=self._random.uniform(-0.05, 0.05),
             minimum=30.0,
             maximum=43.0,

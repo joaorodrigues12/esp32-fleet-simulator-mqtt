@@ -6,10 +6,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
 
+from esp32_fleet.domain.vitals import VitalsScenario
+
 
 @dataclass(frozen=True, slots=True)
 class SimulatorSettings:
-    """Opções de conexão, cadência e tamanho da frota."""
+    """Opções de conexão, cadência, tamanho da frota e perfil dos sinais."""
 
     broker: str
     port: int
@@ -18,6 +20,7 @@ class SimulatorSettings:
     seed: int | None
     samples: int | None
     devices: int = 1
+    scenario: VitalsScenario = VitalsScenario.BASELINE
 
     @property
     def device_number_width(self) -> int:
@@ -38,6 +41,13 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
     parser.add_argument("--interval", type=float, default=2.0, help="Intervalo em segundos.")
     parser.add_argument("--seed", type=int, help="Semente do gerador para reproduzir a série.")
     parser.add_argument("--samples", type=int, help="Quantidade de amostras por dispositivo.")
+    parser.add_argument(
+        "--scenario",
+        type=VitalsScenario,
+        choices=list(VitalsScenario),
+        default=VitalsScenario.BASELINE,
+        help="Perfil dos sinais sintéticos. Padrão: baseline.",
+    )
     args = parser.parse_args(argv)
 
     broker = args.broker.strip()
@@ -56,7 +66,14 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
     if device_id is None:
         device_id = "esp32-001" if args.devices == 1 else "esp32"
     settings = SimulatorSettings(
-        broker, args.port, device_id, args.interval, args.seed, args.samples, args.devices
+        broker,
+        args.port,
+        device_id,
+        args.interval,
+        args.seed,
+        args.samples,
+        args.devices,
+        scenario=args.scenario,
     )
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", device_id):
         parser.error("--device-id deve seguir o formato de identificador MQTT do projeto.")

@@ -10,6 +10,7 @@ import pytest
 
 from esp32_fleet.__main__ import main
 from esp32_fleet.config.settings import SimulatorSettings, parse_settings
+from esp32_fleet.domain.vitals import VitalsScenario
 from esp32_fleet.mqtt.connection import MqttConnection
 from esp32_fleet.mqtt.reconnect import ConnectionPolicy
 from esp32_fleet.orchestration.fleet import run_fleet
@@ -32,8 +33,12 @@ def test_cli_defaults_and_custom_settings() -> None:
             "42",
             "--samples",
             "3",
+            "--scenario",
+            "temperature-rise",
         ]
-    ) == SimulatorSettings("localhost", 31883, "esp32-9", 0.5, 42, 3)
+    ) == SimulatorSettings(
+        "localhost", 31883, "esp32-9", 0.5, 42, 3, scenario=VitalsScenario.TEMPERATURE_RISE
+    )
 
 
 @pytest.mark.parametrize(
@@ -47,6 +52,7 @@ def test_cli_defaults_and_custom_settings() -> None:
         ("--samples", "-1"),
         ("--devices", "0"),
         ("--device-id", "esp32/+"),
+        ("--scenario", "unknown"),
     ],
 )
 def test_cli_rejects_invalid_settings(

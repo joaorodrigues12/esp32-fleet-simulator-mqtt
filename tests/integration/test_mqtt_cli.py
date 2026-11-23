@@ -14,6 +14,7 @@ from test_mqtt_connection_integration import mosquitto_executable as mosquitto_e
 from test_mqtt_sessions import _command
 
 from esp32_fleet.domain.sessions import SessionAction
+from esp32_fleet.domain.vitals import VitalsGenerator, VitalsScenario
 
 _TOPIC = "vitals/esp32-001"
 
@@ -123,6 +124,8 @@ async def _verify_fleet(executable: str, port: int, config: Path) -> None:
                 "4",
                 "--seed",
                 "42",
+                "--scenario",
+                "temperature-rise",
             ]
             with _running_process(args, config.with_name("fleet.log")) as cli:
                 async with asyncio.timeout(15):
@@ -163,7 +166,12 @@ async def _verify_fleet(executable: str, port: int, config: Path) -> None:
                     )
                     == 12
                 )
-                for device_id, batch in samples.items():
+                for seed, device_id in enumerate(sorted(samples), start=42):
+                    batch = samples[device_id]
+                    generator = VitalsGenerator(seed=seed, scenario=VitalsScenario.TEMPERATURE_RISE)
+                    assert [sample["temperature_c"] for sample in batch] == [
+                        generator.generate().temperature_c for _ in batch
+                    ]
                     assert [sample["sequence_number"] for sample in batch] == [0, 1, 2, 3]
                     assert {sample["boot_id"] for sample in batch} == {online[device_id]}
                     assert batch[0]["session_id"] is None
@@ -180,7 +188,7 @@ async def _verify_fleet(executable: str, port: int, config: Path) -> None:
 def test_cli_runs_a_fleet_with_independent_sessions_and_samples(
     mosquitto_executable: str, unused_tcp_port: int, mosquitto_config: Path
 ) -> None:
-    """Confirma amostras e encerramento por dispositivo e isolamento da sessão."""
+    """Confirma o cenário na frota, o encerramento e o isolamento da sessão."""
     asyncio.run(
         _verify_fleet(mosquitto_executable, unused_tcp_port, mosquitto_config),
         loop_factory=asyncio.SelectorEventLoop,
