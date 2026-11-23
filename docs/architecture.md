@@ -76,7 +76,7 @@ Reconexão: cada dispositivo supervisiona sua conexão; falhas transitórias aci
 
 **Medição de carga** — Com 50 dispositivos e 150 amostras por dispositivo, o assinante espera 7.500 publicações de `data`. O total de mensagens no broker também inclui status, sessões, ACKs e cenários. O ensaio registra entrega por sequência, duplicatas, vazão e latências p50 e p95. Consulte o [procedimento e o resultado medido](development.md#ensaio-de-carga).
 
-Medições de CPU, memória e tempo de recuperação exigem ensaios próprios. Se um consumidor futuro depender intensamente de APIs síncronas, compare medições antes de adotar threads.
+A carga estável também registra CPU e memória residente do processo do simulador. Um ensaio separado reinicia o broker e mede quando cada dispositivo volta a publicar com um novo `boot_id`. Consulte o [procedimento e os resultados](development.md#ensaio-de-recursos-e-tempo-de-recupera%C3%A7%C3%A3o). Se um consumidor futuro depender intensamente de APIs síncronas, compare medições antes de adotar threads.
 
 ## 6. Ciclo de vida do dispositivo e da sessão
 
