@@ -57,6 +57,7 @@ async def run_device(settings: SimulatorSettings) -> None:
             password=settings.password,
             tls_context=settings.tls_context,
             on_session_command=handler.handle,
+            command_queue_size=settings.command_queue_size,
             metrics=metrics,
         ) as connection:
             for cycle in count(1):

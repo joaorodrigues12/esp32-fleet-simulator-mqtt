@@ -85,7 +85,9 @@ def test_cli_rejects_partial_credentials(
 
 def test_cli_defaults_and_custom_settings() -> None:
     """Interpreta as opções de conexão e execução."""
-    assert parse_settings([]) == SimulatorSettings("127.0.0.1", 1883, "esp32-001", 2.0, None, None)
+    defaults = parse_settings([])
+    assert defaults == SimulatorSettings("127.0.0.1", 1883, "esp32-001", 2.0, None, None)
+    assert defaults.command_queue_size == 128
     assert parse_settings(
         [
             "--broker",
@@ -102,9 +104,18 @@ def test_cli_defaults_and_custom_settings() -> None:
             "3",
             "--scenario",
             "temperature-rise",
+            "--command-queue-size",
+            "4",
         ]
     ) == SimulatorSettings(
-        "localhost", 31883, "esp32-9", 0.5, 42, 3, scenario=VitalsScenario.TEMPERATURE_RISE
+        "localhost",
+        31883,
+        "esp32-9",
+        0.5,
+        42,
+        3,
+        scenario=VitalsScenario.TEMPERATURE_RISE,
+        command_queue_size=4,
     )
 
 
@@ -123,6 +134,9 @@ def test_cli_defaults_and_custom_settings() -> None:
         ("--delay-every", "2"),
         ("--delay-seconds", "0.5"),
         ("--omit-every", "0"),
+        ("--command-queue-size", "0"),
+        ("--command-queue-size", "-1"),
+        ("--command-queue-size", "1.5"),
     ],
 )
 def test_cli_rejects_invalid_settings(
@@ -304,6 +318,7 @@ async def test_publish_sample_replays_original_bytes_and_uses_new_boot_next() ->
             username="test-device",
             password="synthetic-secret",
             tls_context=tls_context,
+            command_queue_size=4,
         ) as connection:
             await connection.publish_sample(sample, delay_seconds=simulated_delay)
             await connection.publish_sample(sample)
@@ -314,6 +329,7 @@ async def test_publish_sample_replays_original_bytes_and_uses_new_boot_next() ->
         assert call.kwargs["username"] == "test-device"
         assert call.kwargs["password"] == "synthetic-secret"
         assert call.kwargs["tls_context"] is tls_context
+        assert call.kwargs["max_queued_incoming_messages"] == 4
     original, recovered = sampled_boots
     assert original != recovered
     assert first.publish.await_args_list[1].args == (topic, str(original).encode("ascii"))

@@ -313,6 +313,18 @@ Envie `START` e `END` com o `boot_id` anunciado em `status`. A conexão publica 
 retenção. Um comando inválido com `command_id` recuperável recebe `INVALID_PAYLOAD`. Use
 `uv run --locked pytest -q tests/integration/test_mqtt_sessions.py` para exercitar o fluxo.
 
+### Limite da fila de comandos
+
+Cada dispositivo aceita até 128 comandos em espera, além do comando em processamento.
+Use `--command-queue-size N` para configurar a capacidade com um inteiro positivo.
+Quando a fila lota, o cliente MQTT emite um aviso em `stderr` e descarta os novos
+comandos até abrir espaço. Os comandos já enfileirados seguem na ordem de chegada.
+
+O controlador confirma o processamento pelo ACK de aplicação em
+`vitals/{device_id}/ack`, correlacionado pelo `command_id`. Se o ACK não chegar
+no prazo, o controlador pode repetir o mesmo comando enquanto ele ainda for válido,
+conforme as regras de recuperação. [Contratos MQTT](docs/contracts.md#recupera%C3%A7%C3%A3o-ap%C3%B3s-reconex%C3%A3o-ou-reinicializa%C3%A7%C3%A3o)
+
 ## Arquitetura e contratos
 
 Leia [arquitetura](docs/architecture.md), [contratos](docs/contracts.md) e [ADRs](docs/adr/).

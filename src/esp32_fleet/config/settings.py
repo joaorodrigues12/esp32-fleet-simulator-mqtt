@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from math import isfinite
 
 from esp32_fleet.domain.vitals import VitalsScenario
+from esp32_fleet.mqtt.connection import DEFAULT_COMMAND_QUEUE_SIZE
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +31,7 @@ class SimulatorSettings:
     username: str | None = None
     password: str | None = field(default=None, repr=False)
     tls_context: ssl.SSLContext | None = field(default=None, repr=False)
+    command_queue_size: int = DEFAULT_COMMAND_QUEUE_SIZE
 
     @property
     def device_number_width(self) -> int:
@@ -67,6 +69,13 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
     parser.add_argument(
         "--metrics", action="store_true", help="Emite um resumo JSON por dispositivo em stderr."
     )
+    parser.add_argument(
+        "--command-queue-size",
+        type=int,
+        metavar="N",
+        default=DEFAULT_COMMAND_QUEUE_SIZE,
+        help=f"Comandos em espera por dispositivo. Padrão: {DEFAULT_COMMAND_QUEUE_SIZE}.",
+    )
     args = parser.parse_args(argv)
 
     username = os.environ.get("ESP32_FLEET_MQTT_USERNAME") or None
@@ -95,6 +104,8 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
         parser.error("--samples deve ser positivo.")
     if args.devices < 1:
         parser.error("--devices deve ser positivo.")
+    if args.command_queue_size < 1:
+        parser.error("--command-queue-size deve ser um inteiro positivo.")
     if (args.delay_every is None) != (args.delay_seconds is None):
         parser.error("Informe --delay-every e --delay-seconds em conjunto.")
     if args.delay_every is not None and args.delay_every < 1:
@@ -125,6 +136,7 @@ def parse_settings(argv: Sequence[str] | None = None) -> SimulatorSettings:
         username=username,
         password=password,
         tls_context=tls_context,
+        command_queue_size=args.command_queue_size,
     )
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", device_id):
         parser.error("--device-id deve seguir o formato de identificador MQTT do projeto.")
