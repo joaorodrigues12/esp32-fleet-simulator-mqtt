@@ -1,41 +1,40 @@
 # ESP32 Fleet Simulator — MQTT
 
-Simulador independente de dispositivos ESP32 virtuais que publicará sinais fisiológicos sintéticos via MQTT. O projeto servirá para testes de carga, falhas e contratos de integração, inclusive com o VetMonitor no futuro, sem incorporar seu backend ou dados de pacientes.
+Simulador de dispositivos ESP32 virtuais para testar consumidores MQTT com sinais sintéticos. A CLI executa um dispositivo ou uma frota, publica leituras e presença e responde a comandos de sessão.
 
-## Estado atual
+## Início rápido
 
-O projeto executa uma frota de ESP32 virtuais pela CLI, gera sinais vitais sintéticos, publica telemetria e presença MQTT e responde a comandos de sessão.
+A versão `0.1.0` usa MQTT 3.1.1 e os contratos de payload v1. Os testes automatizados
+rodam em Windows e Ubuntu.
 
-## Pré-requisitos planejados
+### Pré-requisitos
 
 - Python definido em `.python-version` (3.12.8).
 - `uv` 0.13.9 para gerenciamento de ambiente e dependências, a mesma versão usada pelo CI.
-- Docker e Docker Compose para executar o broker de desenvolvimento.
-- Git.
+- Docker com Compose para usar o broker fornecido pelo projeto ou um Mosquitto local em execução.
 
-## Estrutura
+### Ver a primeira mensagem
 
-- `src/esp32_fleet/config`: configurações.
-- `src/esp32_fleet/mqtt`: transporte, roteamento e tópicos.
-- `src/esp32_fleet/handlers`: contratos de entrada e saída.
-- `src/esp32_fleet/domain`: dispositivos, sessões, sinais vitais e cenários.
-- `src/esp32_fleet/orchestration`: ciclo de vida da frota.
-- `src/esp32_fleet/observability`: métricas e logs.
-- `src/esp32_fleet/ports`: interfaces para testes.
-- `tests`: testes unitários, de contrato e integração.
-- `docs/architecture.md`: arquitetura, classes e concorrência.
-- `docs/contracts.md`: tópicos, payloads e regras MQTT.
-- `docs/adr`: decisões arquiteturais.
-
-## Preparação local
+Na raiz do repositório, instale as dependências, inicie o broker do projeto
+e deixe o assinante aguardando uma mensagem.
 
 ```bash
 uv python install
 uv sync --locked --group dev
-uv run --locked pre-commit install --hook-type pre-commit --hook-type commit-msg
+docker compose up -d mosquitto
+docker compose exec -T mosquitto mosquitto_sub -t 'vitals/esp32-001/data' -q 1 -C 1
 ```
 
-O `uv` lê a versão do Python de `.python-version` e instala as dependências registradas em `uv.lock`.
+Em outro terminal, execute o comando da próxima seção. Se você já tem um Mosquitto
+local, pode assinar o mesmo tópico com seu cliente MQTT e indicar o endereço do broker
+com `--broker` e `--port`.
+
+## Estrutura
+
+- `src/esp32_fleet/config` e `orchestration` configuram a CLI e executam a frota.
+- `src/esp32_fleet/domain`, `handlers` e `mqtt` implementam sinais, sessões e comunicação.
+- `src/esp32_fleet/observability` registra métricas por dispositivo.
+- `tests` cobre unidades, contratos e integração com Mosquitto.
 
 ## Executar um dispositivo virtual
 
@@ -247,9 +246,11 @@ Leia [arquitetura](docs/architecture.md), [contratos](docs/contracts.md) e [ADRs
 A branch `main` recebe entregas revisadas em pull requests com o CI aprovado.
 Consulte o [guia de desenvolvimento](docs/development.md) para reproduzir as verificações na sua máquina.
 
-## Próximas funcionalidades
+## Ensaios com a frota
 
-1. Cenários de falha e testes de carga.
+A referência local com 50 dispositivos entregou 7.500 leituras em cerca de cinco minutos.
+Em um ensaio separado, os 50 dispositivos retomaram a publicação após o reinício do broker.
+Consulte o procedimento e os resultados de CPU, memória e recuperação no [guia de desenvolvimento](docs/development.md#ensaio-de-recursos-e-tempo-de-recupera%C3%A7%C3%A3o).
 
 ## Licença
 

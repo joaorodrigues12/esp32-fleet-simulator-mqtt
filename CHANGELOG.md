@@ -5,6 +5,8 @@ O formato segue Keep a Changelog e Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.0]
+
 ### Added
 
 - Scaffold arquitetural, contratos MQTT e decisões iniciais.
@@ -19,3 +21,10 @@ O formato segue Keep a Changelog e Semantic Versioning.
 - Seleção de cenários sintéticos pela CLI, com perfil padrão e elevação reproduzível de temperatura.
 - Simulação periódica de atrasos e omissões de telemetria, configurável pela CLI.
 - Resumo JSON opcional por dispositivo com leituras confirmadas, omissões, falhas MQTT e reconexões.
+- CI com Mosquitto no Ubuntu e no Windows e testes de retomada da frota após reiniciar o broker.
+- Benchmark local com até 50 dispositivos, com coleta de entrega, latência, CPU, memória e tempo de recuperação.
+
+### Validação de referência
+
+- Em carga estável no Windows 11, o assinante recebeu 7.500 de 7.500 leituras de 50 dispositivos em 300,547 s. A CLI usou em média 0,738% de um processador lógico, com pico observado de 51,914 MiB de memória residente.
+- Após o reinício do Mosquitto, os 50 dispositivos retomaram a publicação em até 1,049 s a partir do retorno da porta do broker. [Procedimento e resultados](docs/development.md#ensaio-de-recursos-e-tempo-de-recupera%C3%A7%C3%A3o)

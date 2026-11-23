@@ -1,6 +1,6 @@
 # Contratos MQTT — versão 1
 
-Status: proposta inicial versionada. O contrato deve ser revisado antes de implementar handlers.
+Contrato MQTT usado pelo simulador `0.1.0`. A versão do envelope é `schema_version=1`.
 
 ## 1. Namespace e direcionamento
 
@@ -14,7 +14,7 @@ Status: proposta inicial versionada. O contrato deve ser revisado antes de imple
 | `vitals/{device_id}/command` | Controlador → dispositivo | 1 | **Não** | `SessionCommandV1` | Evita replay automático de comando antigo após subscribe |
 | `vitals/{device_id}/ack` | Dispositivo → controlador | 1 | Não | `CommandAckV1` | Confirma resultado de comando por ID |
 
-`status` retido representa o último anúncio. Use o instante de recebimento e o timeout de heartbeat para interpretar presença. Somente `status` é retido. MQTT 3.1.1 é o alvo inicial.
+`status` retido representa o último anúncio. Use o instante de recebimento e o timeout de heartbeat para interpretar presença. Somente `status` é retido. O simulador usa MQTT 3.1.1.
 
 ### Wildcards
 
@@ -27,7 +27,10 @@ Status: proposta inicial versionada. O contrato deve ser revisado antes de imple
 
 ## 2. Envelope comum
 
-Mensagens são JSON UTF-8 de até 16 KiB (limite inicial de aplicação). Valores `NaN`, `Infinity` e numéricos fora da faixa declarada são rejeitados pelo Pydantic. Campos desconhecidos são rejeitados em contratos v1 para prevenir erros silenciosos; acréscimos compatíveis exigem incremento de `schema_version` menor ou nova política de compatibilidade documentada.
+O formato é JSON UTF-8, com limite de aplicação de 16 KiB para telemetria e comandos recebidos.
+O simulador valida comandos com Pydantic, incluindo tipos, campos obrigatórios e
+campos desconhecidos. O gerador mantém os sinais sintéticos dentro das faixas
+descritas em `VitalsDataV1`.
 
 Campos comuns: `schema_version` (inteiro, inicialmente `1`), `message_id` (UUID), `device_id` (string), `boot_id` (UUID) e `occurred_at` (timestamp ISO 8601 UTC). Dados de leitura usam também `sampled_at` para preservar a hora efetiva da medição.
 
@@ -41,7 +44,7 @@ O `boot_id` identifica o ciclo de comunicação do dispositivo. Gere um UUID ant
 | `message_id`, `boot_id` | UUID | Sim | IDs válidos |
 | `device_id` | string | Sim | igual ao ID no tópico |
 | `occurred_at`, `sampled_at` | UTC datetime | Sim | com fuso; `sampled_at` não muda em atraso |
-| `sequence_number` | int | Sim | >= 0, monotônico por `boot_id` |
+| `sequence_number` | int | Sim | >= 0, monotônico por `boot_id`, com lacunas quando há omissões simuladas |
 | `session_id` | UUID ou null | Sim | null quando em `IDLE` |
 | `session_version` | int | Sim | >= 0; corresponde à revisão capturada na geração |
 | `heart_rate_bpm` | int | Sim | 20 a 250 (limite de validação, não faixa normal) |
@@ -118,6 +121,10 @@ O VetMonitor é a fonte autoritativa do vínculo entre dispositivo e paciente e 
 O consumidor deduplica por `message_id` e avalia a ordenação por `(device_id, boot_id, sequence_number)`. A sequência começa novamente a cada conexão. Mensagens de tópicos diferentes podem chegar fora de ordem. Mesmo se uma leitura chegar depois do ACK da nova sessão, o consumidor usa o `session_id`, a revisão e o `sampled_at` originais para validar o vínculo histórico e o intervalo de monitoramento. Uma leitura sem sessão fica fora do histórico do paciente. A chegada de uma leitura nunca altera a sessão ativa.
 
 O [cenário automatizado de referência](../tests/contracts/fixtures/session_recovery.json) inclui uma leitura da sessão A, a reconexão para a sessão B e um comando antigo ainda dentro do prazo, rejeitado por apontar para o `boot_id` anterior.
+
+O simulador usa o instante da coleta em `occurred_at` e em `sampled_at` para as leituras
+da CLI. A omissão simulada avança a sequência do dispositivo e pode deixar uma lacuna
+observável na próxima leitura do mesmo `boot_id`.
 
 ## 4. Compatibilidade e evolução
 

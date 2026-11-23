@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "esp32-fleet-simulator-mqtt"
-version = "0.0.0"
+version = "0.1.0"
 description = "Simulador independente de dispositivos ESP32 que publica sinais fisiologicos sinteticos via MQTT."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"

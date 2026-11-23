@@ -37,6 +37,18 @@ uv run --locked pytest -v -W error::pytest.PytestDeprecationWarning
 
 Confira o resultado em **Checks** no pull request ou em **Actions** para um push.
 
+## Validação do pacote
+
+Na raiz do repositório, gere o wheel e confira a CLI em um ambiente isolado.
+
+```console
+uv build --out-dir dist
+uv run --isolated --no-project --with ./dist/esp32_fleet_simulator_mqtt-0.1.0-py3-none-any.whl python -m esp32_fleet --help
+```
+
+O nome do wheel inclui a versão declarada em `pyproject.toml`. Antes de publicar
+uma versão, confira também o changelog e o CI do commit correspondente na `main`.
+
 ## Ensaio de recuperação do broker
 
 Com o Mosquitto no PATH ou indicado por `MOSQUITTO_EXECUTABLE`, rode na raiz do projeto.
