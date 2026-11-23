@@ -137,24 +137,33 @@ class MqttConnection:
                 raise RuntimeError("Abra o contexto MQTT antes de publicar.")
             await self._connect_and_publish(payload)
 
-    async def publish_sample(self, sample: Callable[[UUID], bytes]) -> None:
+    async def publish_sample(
+        self, sample: Callable[[UUID], bytes], *, delay_seconds: float = 0.0
+    ) -> None:
         """Obtém uma amostra no boot conectado e preserva os bytes nas novas tentativas.
 
         Args:
             sample: Função síncrona que serializa a leitura para o boot informado.
+            delay_seconds: Espera antes da primeira tentativa de envio, após a serialização.
 
         Raises:
             RuntimeError: Se o contexto com presença não estiver ativo.
-            ValueError: Se a função retornar uma mensagem vazia ou acima de 16 KiB.
+            ValueError: Se o atraso for inválido ou a mensagem estiver fora dos limites.
             aiomqtt.MqttError: Se as tentativas de conexão ou publicação falharem.
         """
+        if not isfinite(delay_seconds) or delay_seconds < 0:
+            raise ValueError("O atraso da amostra deve ser finito e não negativo.")
         async with self._lock:
             if not self._active or not self._presence_enabled:
                 raise RuntimeError("Abra o contexto MQTT com presença antes de gerar amostras.")
-            await self._connect_and_publish(sample=sample)
+            await self._connect_and_publish(sample=sample, sample_delay=delay_seconds)
 
     async def _connect_and_publish(
-        self, payload: bytes | None = None, *, sample: Callable[[UUID], bytes] | None = None
+        self,
+        payload: bytes | None = None,
+        *,
+        sample: Callable[[UUID], bytes] | None = None,
+        sample_delay: float = 0.0,
     ) -> None:
         delays = self._policy.retry_delays()
         while True:
@@ -168,6 +177,9 @@ class MqttConnection:
                         raise RuntimeError("A conexão MQTT não anunciou presença.")
                     payload = sample(boot_id)
                     _validate_telemetry_payload(payload)
+                    if sample_delay:
+                        # O mesmo payload segue para as tentativas posteriores sem repetir a espera.
+                        await asyncio.sleep(sample_delay)
                 if payload is not None:
                     await client.publish(self._topic, payload, qos=1, retain=False)
                 return

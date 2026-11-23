@@ -71,6 +71,15 @@ async def test_connection_error_is_reported_after_retry_budget() -> None:
         assert factory.call_count == 2
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seconds", [-1.0, float("inf"), float("nan")])
+async def test_publish_sample_rejects_invalid_delay(seconds: float) -> None:
+    """Recusa atrasos inválidos antes de acessar o broker."""
+    connection = MqttConnection("esp32-001")
+    with pytest.raises(ValueError, match="atraso"):
+        await connection.publish_sample(lambda boot_id: b"{}", delay_seconds=seconds)
+
+
 @pytest.mark.parametrize("device_id", ["", "esp32/001", "+", "x" * 65])
 def test_invalid_device_id_is_rejected(device_id: str) -> None:
     """Valida o nível do tópico conforme o contrato MQTT."""

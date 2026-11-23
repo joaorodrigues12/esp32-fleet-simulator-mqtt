@@ -17,3 +17,4 @@ O formato segue Keep a Changelog e Semantic Versioning.
 - CLI para publicar amostras de um dispositivo virtual com presença e vínculo de sessão.
 - Orquestração de múltiplos dispositivos com conexões, sessões e séries independentes.
 - Seleção de cenários sintéticos pela CLI, com perfil padrão e elevação reproduzível de temperatura.
+- Simulação periódica de atrasos e omissões de telemetria, configurável pela CLI.

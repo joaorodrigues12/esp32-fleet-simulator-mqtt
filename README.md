@@ -93,6 +93,25 @@ Com o mesmo cenário e a mesma semente, os valores dos sinais se repetem. Em mod
 de frota, cada membro usa o cenário escolhido com sua própria semente derivada.
 Os tópicos e os campos das mensagens MQTT permanecem os mesmos.
 
+### Simular atraso e omissão de leituras
+
+Use `--delay-every N --delay-seconds S` para esperar S segundos depois da coleta
+de cada Nª leitura e antes da primeira tentativa de envio. O `sampled_at` indica
+o instante da coleta. O intervalo normal entre ciclos é aplicado após o envio.
+
+Use `--omit-every N` para pular o envio de cada Nª leitura. A série e a sequência
+avançam, de modo que a próxima amostra publicada no mesmo `boot_id` revela a lacuna.
+Quando as duas regras coincidem, a leitura é omitida sem aplicar o atraso.
+`--samples` inclui os ciclos omitidos, e a contagem de ciclos é independente por dispositivo.
+
+```bash
+uv run --locked python -m esp32_fleet --seed 42 --samples 6 --omit-every 2 --delay-every 3 --delay-seconds 0.5
+```
+
+Em uma conexão contínua, o comando publica as sequências `0`, `2` e `4`, com atraso
+na sequência `2`. Em uma reconexão, a sequência MQTT recomeça no novo `boot_id`
+e a contagem dos ciclos do dispositivo continua.
+
 ## Publicar uma amostra no Mosquitto
 
 Execute `docker compose up -d mosquitto`. O broker de desenvolvimento aceita conexões anônimas
