@@ -329,6 +329,33 @@ conforme as regras de recuperação. [Contratos MQTT](docs/contracts.md#recupera
 
 Leia [arquitetura](docs/architecture.md), [contratos](docs/contracts.md) e [ADRs](docs/adr/).
 
+## Consumir telemetria em JSON Lines
+
+Com o broker em execução, inicie o consumidor na raiz do projeto.
+
+```bash
+uv run --locked python scripts/consume_telemetry.py --messages 3
+```
+
+Depois que o consumidor confirmar a assinatura, publique as três leituras em outro terminal.
+
+```bash
+uv run --locked python -m esp32_fleet --seed 42 --samples 3
+```
+
+O consumidor assina `vitals/+/data` com QoS 1, valida a leitura v1 e confere
+se o `device_id` corresponde ao tópico. A saída padrão contém uma linha JSON
+por leitura aceita. Avisos sobre mensagens inválidas vão para `stderr`.
+
+Por padrão, a deduplicação guarda os últimos 4.096 IDs aceitos em memória.
+Use `--dedup-window N` para configurar esse limite. Um ID que já saiu da janela
+pode ser aceito novamente. `--messages N` conta as leituras aceitas. Para
+consumo contínuo, omita essa opção e encerre com `Ctrl+C`.
+
+Use `--broker` e `--port` para outro endereço. O consumidor lê as mesmas
+variáveis de ambiente de autenticação e CA do simulador. No perfil TLS com
+permissões por tópico, use a conta `controller` e a porta `8883`.
+
 ## Estratégia Git
 
 A branch `main` recebe entregas revisadas em pull requests com o CI aprovado.

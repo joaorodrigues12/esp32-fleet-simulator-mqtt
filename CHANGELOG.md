@@ -10,6 +10,7 @@ O formato segue Keep a Changelog e Semantic Versioning.
 - Perfil autenticado do Mosquitto local e suporte a usuário e senha por variáveis de ambiente na CLI.
 - Perfil TLS com validação da identidade do broker e permissões MQTT para as contas `simulator` e `controller`.
 - Limite configurável de comandos em espera por dispositivo, com aviso quando a fila descarta novos comandos.
+- Consumidor MQTT de referência com validação de telemetria v1, deduplicação em memória e saída JSON Lines.
 
 ## [0.1.0]
 
