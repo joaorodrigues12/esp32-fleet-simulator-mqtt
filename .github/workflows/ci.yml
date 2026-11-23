@@ -37,10 +37,10 @@ jobs:
       - name: Preparar o ambiente
         run: |
           uv python install
-          uv sync --locked --group dev
+          uv sync --locked --group dev --extra gui
 
       - name: Verificar lint, formatação e tipos
-        run: uv run --locked pre-commit run --all-files
+        run: uv run --locked --extra gui pre-commit run --all-files
 
       - name: Instalar Mosquitto no Ubuntu
         if: runner.os == 'Linux'
@@ -78,4 +78,6 @@ jobs:
           "MOSQUITTO_EXECUTABLE=$executable" >> $env:GITHUB_ENV
 
       - name: Executar os testes
-        run: uv run --locked pytest -v -W error::pytest.PytestDeprecationWarning
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run --locked --extra gui pytest -v -W error::pytest.PytestDeprecationWarning

@@ -112,6 +112,35 @@ para testar uma permissão de publicação.
 - `src/esp32_fleet/observability` registra métricas por dispositivo.
 - `tests` cobre unidades, contratos e integração com Mosquitto.
 
+## Controle desktop da frota
+
+Instale o extra da GUI na raiz do projeto e abra a janela com o broker em execução.
+
+```console
+uv sync --locked --group dev --extra gui
+uv run --locked --extra gui python -m esp32_fleet.gui
+```
+
+Na tela **Controle da frota**, configure quantidade, prefixo, cenário, semente,
+amostras, intervalo e broker. A prévia mostra até 100 identificadores por página
+e exibe um aviso de recursos acima de 50 dispositivos. O campo de amostras vazio
+mantém a execução contínua até clicar em **Parar**.
+
+**Iniciar ensaio** executa a engine em um processo filho. **Parar** solicita o
+encerramento ordenado. Após dez segundos, a janela indica uma falha de parada
+e interrompe o processo. A saída da execução exibe os logs e as métricas finais.
+**Copiar comando CLI** usa os mesmos parâmetros para executar pelo terminal.
+As variáveis de autenticação e TLS são lidas do ambiente.
+
+A tela acompanha o processo local. Os estados MQTT de cada dispositivo serão
+apresentados na etapa de monitoramento.
+
+Com o Mosquitto disponível, execute os testes da GUI na raiz do projeto.
+
+```console
+uv run --locked --extra gui pytest -q tests/unit/test_gui_configuration.py tests/integration/test_gui_fleet.py
+```
+
 ## Executar um dispositivo virtual
 
 Com o broker local em execução, este comando publica três amostras e encerra:
