@@ -42,12 +42,12 @@ jobs:
       - name: Verificar lint, formatação e tipos
         run: uv run --locked --extra gui pre-commit run --all-files
 
-      - name: Instalar Mosquitto no Ubuntu
+      - name: Instalar Mosquitto e dependências da GUI no Ubuntu
         if: runner.os == 'Linux'
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends mosquitto
+          sudo apt-get install -y --no-install-recommends mosquitto libegl1
           mosquitto_executable="$(command -v mosquitto)"
           test -x "$mosquitto_executable"
           printf 'MOSQUITTO_EXECUTABLE=%s\n' "$mosquitto_executable" >> "$GITHUB_ENV"
