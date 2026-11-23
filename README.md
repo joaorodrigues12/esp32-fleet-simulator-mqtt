@@ -79,6 +79,20 @@ sample = generator.generate()
 print(sample)
 ```
 
+### Selecionar um cenário
+
+A CLI usa `--scenario baseline` por padrão. Use `temperature-rise` para que a série
+de temperatura parta da mesma referência de 36,7 °C e se aproxime gradualmente de
+38,7 °C ao longo das amostras, com pequenas flutuações.
+
+```bash
+uv run --locked python -m esp32_fleet --scenario temperature-rise --seed 42 --samples 20
+```
+
+Com o mesmo cenário e a mesma semente, os valores dos sinais se repetem. Em modo
+de frota, cada membro usa o cenário escolhido com sua própria semente derivada.
+Os tópicos e os campos das mensagens MQTT permanecem os mesmos.
+
 ## Publicar uma amostra no Mosquitto
 
 Execute `docker compose up -d mosquitto`. O broker de desenvolvimento aceita conexões anônimas

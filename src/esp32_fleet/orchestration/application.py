@@ -16,7 +16,7 @@ from esp32_fleet.mqtt.connection import MqttConnection
 async def run_device(settings: SimulatorSettings) -> None:
     """Publica amostras até atingir o limite configurado ou receber cancelamento."""
     handler = CommandHandler(settings.device_id)
-    generator = VitalsGenerator(seed=settings.seed)
+    generator = VitalsGenerator(seed=settings.seed, scenario=settings.scenario)
     last_boot: UUID | None = None
     sequence = count()
 
