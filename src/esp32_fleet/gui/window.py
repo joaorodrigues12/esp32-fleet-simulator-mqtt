@@ -4,10 +4,11 @@ import os
 import shlex
 import sys
 from codecs import getincrementaldecoder
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import redirect_stderr
 from dataclasses import dataclass
 from io import StringIO
+from itertools import islice
 from secrets import randbits
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer, Slot
@@ -36,6 +37,12 @@ from esp32_fleet.gui.monitor import FleetMonitor, MonitorCredentials
 
 DEVICES_PER_PAGE = 100
 _RESOURCE_WARNING_SIZE = 50
+_FILTER_BATCH_SIZE = 512
+_ALL_STATES = "Todos os estados"
+_AWAITING_STATE = "Aguardando"
+
+type DeviceRow = tuple[int, str]
+type FilterResult = tuple[list[DeviceRow], int]
 
 _STYLE = """
 QWidget#workspace { background: #101922; color: #e7eef4; }
@@ -43,7 +50,7 @@ QFrame#panel { background: #17242f; border: 1px solid #334958; border-radius: 10
 QLabel { color: #e7eef4; background: transparent; }
 QLabel#title { font-size: 26px; font-weight: 700; }
 QLabel#sectionTitle { font-size: 16px; font-weight: 700; }
-QLabel#muted { color: #a8becf; }
+QLabel#muted, QLabel[muted="true"] { color: #a8becf; }
 QLabel#validation, QLabel#warning { color: #fec97c; }
 QLabel#runStatus {
     background: #293d4d; border-radius: 6px; padding: 8px 14px; color: #e7eef4;
@@ -169,6 +176,7 @@ class FleetWindow(QMainWindow):
         self._monitor_retiring = False
         self._mqtt_states: dict[str, str] = {}
         self._state_cells: dict[str, QTableWidgetItem] = {}
+        self._filter_scan: Iterator[FilterResult | None] | None = None
         self._decoder = getincrementaldecoder("utf-8")(errors="replace")
 
         self._process = QProcess(self)
@@ -182,6 +190,13 @@ class FleetWindow(QMainWindow):
         self._stop_timer.setSingleShot(True)
         self._stop_timer.setInterval(10_000)
         self._stop_timer.timeout.connect(self._stop_timeout)
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(10)
+        self._filter_timer.timeout.connect(self._continue_filter_scan)
+        self._state_refresh_timer = QTimer(self)
+        self._state_refresh_timer.setSingleShot(True)
+        self._state_refresh_timer.timeout.connect(self._render_page)
         self._build_window()
         self._refresh_configuration()
 
@@ -306,7 +321,8 @@ class FleetWindow(QMainWindow):
         title.setObjectName("sectionTitle")
         heading.addWidget(title, 1)
         self._count = QLabel()
-        self._count.setObjectName("muted")
+        self._count.setObjectName("deviceCount")
+        self._count.setProperty("muted", True)
         heading.addWidget(self._count)
         layout.addLayout(heading)
 
@@ -314,6 +330,22 @@ class FleetWindow(QMainWindow):
         self._monitor_label.setObjectName("mqttMonitorStatus")
         self._monitor_label.setWordWrap(True)
         layout.addWidget(self._monitor_label)
+
+        filters = QHBoxLayout()
+        self._id_filter = QLineEdit()
+        self._id_filter.setObjectName("deviceIdFilter")
+        self._id_filter.setPlaceholderText("Buscar identificador MQTT")
+        self._id_filter.setAccessibleName("Buscar identificador MQTT")
+        self._id_filter.setClearButtonEnabled(True)
+        self._id_filter.textChanged.connect(self._reset_filter_page)
+        filters.addWidget(self._id_filter, 1)
+        self._state_filter = QComboBox()
+        self._state_filter.setObjectName("deviceStateFilter")
+        self._state_filter.setAccessibleName("Filtrar por estado MQTT")
+        self._state_filter.addItems([_ALL_STATES, "Online", "Offline", _AWAITING_STATE])
+        self._state_filter.currentTextChanged.connect(self._reset_filter_page)
+        filters.addWidget(self._state_filter)
+        layout.addLayout(filters)
 
         self._table = QTableWidget(0, 3)
         self._table.setObjectName("devicePreview")
@@ -338,13 +370,16 @@ class FleetWindow(QMainWindow):
 
         paging = QHBoxLayout()
         self._previous = QPushButton("Anterior")
+        self._previous.setObjectName("previousDevicePage")
         self._previous.clicked.connect(lambda: self._change_page(-1))
         paging.addWidget(self._previous)
         self._page_label = QLabel()
-        self._page_label.setObjectName("muted")
+        self._page_label.setObjectName("devicePage")
+        self._page_label.setProperty("muted", True)
         self._page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         paging.addWidget(self._page_label, 1)
         self._next = QPushButton("Próxima")
+        self._next.setObjectName("nextDevicePage")
         self._next.clicked.connect(lambda: self._change_page(1))
         paging.addWidget(self._next)
         layout.addLayout(paging)
@@ -378,22 +413,91 @@ class FleetWindow(QMainWindow):
         self._set_actions_running(self._process.state() != QProcess.ProcessState.NotRunning)
         self._render_page()
 
+    def _reset_filter_page(self) -> None:
+        self._page = 0
+        self._render_page()
+
     def _render_page(self) -> None:
+        self._filter_timer.stop()
+        self._state_refresh_timer.stop()
+        self._filter_scan = None
         settings = self._settings
+        query = self._id_filter.text().strip().casefold()
+        state = self._state_filter.currentText()
+        if settings is not None and (query or state != _ALL_STATES):
+            self._filter_scan = self._scan_filtered_page(settings, query, state)
+            self._continue_filter_scan()
+            return
+
         devices = preview_ids(settings, self._page) if settings is not None else []
+        start = self._page * DEVICES_PER_PAGE + 1
+        total = settings.devices if settings is not None else 0
+        self._show_page(list(enumerate(devices, start)), total, filtered=False)
+
+    def _scan_filtered_page(
+        self, settings: SimulatorSettings, query: str, state: str
+    ) -> Iterator[FilterResult | None]:
+        # Processa um lote por vez e guarda apenas as linhas da página pedida.
+        positions = iter(range(1, settings.devices + 1))
+        prefix = settings.device_id
+        width = settings.device_number_width
+        page_start = self._page * DEVICES_PER_PAGE
+        rows: list[DeviceRow] = []
+        matches = 0
+        while batch := tuple(islice(positions, _FILTER_BATCH_SIZE)):
+            for position in batch:
+                device_id = prefix if settings.devices == 1 else f"{prefix}-{position:0{width}d}"
+                if query not in device_id.casefold():
+                    continue
+                label = self._mqtt_states.get(device_id, _AWAITING_STATE)
+                if state != _ALL_STATES and label != state:
+                    continue
+                if page_start <= matches < page_start + DEVICES_PER_PAGE:
+                    rows.append((position, device_id))
+                matches += 1
+            if batch[-1] < settings.devices:
+                yield None
+        yield rows, matches
+
+    def _continue_filter_scan(self) -> None:
+        if self._filter_scan is None:
+            return
+        result = next(self._filter_scan)
+        if result is None:
+            self._show_device_rows([])
+            self._count.setText("Filtrando…")
+            self._page_label.clear()
+            self._previous.setEnabled(False)
+            self._next.setEnabled(False)
+            self._filter_timer.start()
+            return
+
+        self._filter_scan = None
+        rows, matches = result
+        last_page = max(0, (matches - 1) // DEVICES_PER_PAGE)
+        if self._page > last_page:
+            self._page = last_page
+            self._render_page()
+        else:
+            self._show_page(rows, matches, filtered=True)
+
+    def _show_device_rows(self, devices: Sequence[DeviceRow]) -> None:
         self._state_cells.clear()
         self._table.setRowCount(len(devices))
-        for row, device_id in enumerate(devices):
-            position = self._page * DEVICES_PER_PAGE + row + 1
+        for row, (position, device_id) in enumerate(devices):
             self._table.setItem(row, 0, QTableWidgetItem(str(position)))
             self._table.setItem(row, 1, QTableWidgetItem(device_id))
-            state = QTableWidgetItem(self._mqtt_states.get(device_id, "Aguardando"))
+            state = QTableWidgetItem(self._mqtt_states.get(device_id, _AWAITING_STATE))
             self._table.setItem(row, 2, state)
             self._state_cells[device_id] = state
-        total = settings.devices if settings is not None else 0
-        pages = (total + DEVICES_PER_PAGE - 1) // DEVICES_PER_PAGE
-        self._count.setText(f"Total: {total}")
-        self._page_label.setText(f"Página {self._page + 1} de {pages}" if pages else "Sem prévia")
+
+    def _show_page(self, devices: Sequence[DeviceRow], matches: int, *, filtered: bool) -> None:
+        self._show_device_rows(devices)
+        total = self._settings.devices if self._settings is not None else 0
+        self._count.setText(f"{matches} de {total}" if filtered else f"Total: {total}")
+        pages = (matches + DEVICES_PER_PAGE - 1) // DEVICES_PER_PAGE
+        empty_label = "Sem resultados" if filtered else "Sem prévia"
+        self._page_label.setText(f"Página {self._page + 1} de {pages}" if pages else empty_label)
         self._previous.setEnabled(self._page > 0)
         self._next.setEnabled(self._page + 1 < pages)
 
@@ -469,9 +573,12 @@ class FleetWindow(QMainWindow):
         self._clear_mqtt_states()
 
     def _clear_mqtt_states(self) -> None:
+        if not self._mqtt_states:
+            return
         self._mqtt_states.clear()
         for item in self._state_cells.values():
-            item.setText("Aguardando")
+            item.setText(_AWAITING_STATE)
+        self._refresh_state_filter()
 
     @Slot(bool)
     def _monitor_connection_changed(self, connected: bool) -> None:
@@ -488,10 +595,18 @@ class FleetWindow(QMainWindow):
         if self._monitor_retiring:
             return
         label = "Online" if state == "online" else "Offline"
+        if self._mqtt_states.get(device_id) == label:
+            return
         self._mqtt_states[device_id] = label
         cell = self._state_cells.get(device_id)
         if cell is not None:
             cell.setText(label)
+        self._refresh_state_filter()
+
+    def _refresh_state_filter(self) -> None:
+        if self._state_filter.currentText() != _ALL_STATES:
+            # Agrupa vários anúncios do mesmo ciclo da fila de eventos do Qt.
+            self._state_refresh_timer.start()
 
     @Slot()
     def _monitor_finished(self) -> None:
